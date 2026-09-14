@@ -1,0 +1,136 @@
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+enum SubscriptionStatus {
+  TRIAL
+  PAYMENT_PENDING
+  ACTIVE
+  SUSPENDED
+}
+
+enum UserRole {
+  SUPER_ADMIN
+  CLINIC_ADMIN
+  DOCTOR
+}
+
+enum AppointmentStatus {
+  SOLICITADA
+  CONFIRMADA
+  COMPLETADA
+  CANCELADA
+  NO_SHOW
+  EXPIRADA
+}
+
+model Clinic {
+  id                         String             @id @default(uuid())
+  name                       String
+  slug                       String             @unique
+  subscriptionStatus         SubscriptionStatus @default(TRIAL)
+  trialEndsAt                DateTime?
+  gracePeriodDays            Int                @default(5)
+  whatsappPhoneNumberId      String?            @unique
+  telegramBotTokenHash       String?
+  googleCalendarId           String?
+  defaultSlotDurationMinutes Int                @default(30)
+  maxConcurrentHolds         Int                @default(3)
+  createdAt                  DateTime           @default(now())
+  updatedAt                  DateTime           @updatedAt
+
+  users                      User[]
+  doctors                    Doctor[]
+  patients                   Patient[]
+  appointments               Appointment[]
+
+  @@map("clinics")
+}
+
+model User {
+  id           String    @id @default(uuid())
+  clinicId     String?
+  email        String    @unique
+  passwordHash String
+  name         String
+  role         UserRole  @default(CLINIC_ADMIN)
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
+
+  clinic       Clinic?   @relation(fields: [clinicId], references: [id], onDelete: Cascade)
+  doctor       Doctor?
+
+  @@index([clinicId])
+  @@map("users")
+}
+
+model Doctor {
+  id                  String        @id @default(uuid())
+  clinicId            String
+  userId              String?       @unique
+  name                String
+  email               String?
+  specialties         String[]      @default([])
+  googleCalendarId    String?
+  slotDurationMinutes Int?
+  maxConcurrentHolds  Int?
+  createdAt           DateTime      @default(now())
+  updatedAt           DateTime      @updatedAt
+
+  clinic              Clinic        @relation(fields: [clinicId], references: [id], onDelete: Cascade)
+  user                User?         @relation(fields: [userId], references: [id], onDelete: SetNull)
+  appointments        Appointment[]
+
+  @@index([clinicId])
+  @@map("doctors")
+}
+
+model Patient {
+  id             String        @id @default(uuid())
+  clinicId       String
+  name           String
+  phone          String
+  telegramChatId String?
+  createdAt      DateTime      @default(now())
+  updatedAt      DateTime      @updatedAt
+
+  clinic         Clinic        @relation(fields: [clinicId], references: [id], onDelete: Cascade)
+  appointments   Appointment[]
+
+  @@unique([clinicId, phone])
+  @@index([clinicId])
+  @@map("patients")
+}
+
+model Appointment {
+  id                    String            @id @default(uuid())
+  clinicId              String
+  doctorId              String
+  patientId             String
+  status                AppointmentStatus @default(SOLICITADA)
+  startAt               DateTime
+  endAt                 DateTime
+  reason                String?
+  googleCalendarEventId String?
+  holdExpiresAt         DateTime?
+  reconfirmationSentAt  DateTime?
+  reconfirmedAt         DateTime?
+  surveySentAt          DateTime?
+  surveyRating          Int?
+  createdAt             DateTime          @default(now())
+  updatedAt             DateTime          @updatedAt
+
+  clinic                Clinic            @relation(fields: [clinicId], references: [id], onDelete: Cascade)
+  doctor                Doctor            @relation(fields: [doctorId], references: [id], onDelete: Restrict)
+  patient               Patient           @relation(fields: [patientId], references: [id], onDelete: Restrict)
+
+  @@index([clinicId, status])
+  @@index([clinicId, startAt])
+  @@index([doctorId, startAt])
+  @@map("appointments")
+}

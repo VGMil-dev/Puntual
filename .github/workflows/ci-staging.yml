@@ -1,0 +1,117 @@
+name: CI / CD Staging Pipeline (E11.6b & E11.6c)
+
+on:
+  push:
+    branches: [main, develop]
+  pull_request:
+    branches: [main, develop]
+
+jobs:
+  quality-and-test:
+    name: Quality, Lint & Multi-Tenant Tests
+    runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: puntual_ci
+          POSTGRES_PASSWORD: puntual_ci_pass
+          POSTGRES_DB: puntual_ci
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 5
+
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 5
+
+    env:
+      NODE_ENV: test
+      DATABASE_URL: postgresql://puntual_ci:puntual_ci_pass@localhost:5432/puntual_ci?schema=public
+      REDIS_URL: redis://localhost:6379
+      PORT: 3000
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Install pnpm
+        uses: pnpm/action-setup@v3
+        with:
+          version: 11.25.0
+
+      - name: Setup Node.js 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: 'pnpm'
+
+      - name: Install Dependencies
+        run: pnpm install --frozen-lockfile || pnpm install
+
+      - name: Generate Prisma Client
+        run: pnpm prisma:generate
+
+      - name: Apply Database Migrations
+        run: pnpm prisma:migrate:deploy
+
+      - name: Tenant Isolation Boundary Linter (RNF-001)
+        run: pnpm lint:tenant
+
+      - name: Build Application
+        run: pnpm build:api
+
+      - name: Run E2E Test Suite (Health, Webhooks, Tenant Isolation)
+        run: pnpm test:e2e
+
+  deploy-staging:
+    name: Deploy to Staging (VPS + Migrations Job)
+    needs: quality-and-test
+    if: github.ref == 'refs/heads/develop' && github.event_name == 'push'
+    runs-on: ubuntu-latest
+    environment: staging
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      # Ticket E11.6c: Prisma migrations as deployment prerequisite job
+      - name: Run Staging Database Migration Job (E11.6c)
+        env:
+          DATABASE_URL: ${{ secrets.STAGING_DATABASE_URL }}
+        run: |
+          echo "Running prisma migrate deploy against staging database..."
+          npx prisma migrate deploy
+
+      - name: Deploy to Staging VPS via SSH (D1: VPS Propio)
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.STAGING_HOST }}
+          username: ${{ secrets.STAGING_USER }}
+          key: ${{ secrets.STAGING_SSH_KEY }}
+          script: |
+            set -e
+            cd /opt/puntual
+            git fetch origin develop
+            git reset --hard origin/develop
+            
+            # Re-build and restart staging containers with zero downtime
+            docker compose -f docker-compose.staging.yml down
+            docker compose -f docker-compose.staging.yml up -d --build
+            
+            # Verify healthcheck endpoint (E11.6f)
+            echo "Waiting for healthcheck verification..."
+            sleep 10
+            curl -f http://localhost:3000/health || (echo "Healthcheck failed! Aborting deployment." && exit 1)
+            echo "Staging deployment successfully completed!"
