@@ -1,0 +1,43 @@
+# Dependencies
+node_modules/
+.pnpm-store/
+
+# Build outputs
+dist/
+build/
+.next/
+out/
+
+# Environment files and secrets
+.env
+.env.local
+.env.*.local
+.env.staging
+.env.production
+!.env.example
+!.env.staging.example
+
+# Logs
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+*.log
+
+# Coverage and testing
+coverage/
+.nyc_output/
+
+# OS and Editor
+.DS_Store
+Thumbs.db
+.vscode/*
+!.vscode/extensions.json
+!.vscode/settings.json
+.idea/
+
+# Prisma
+# Note: Keep migrations in git, ignore generated clients if in node_modules or local cache
+
+# Database backups
+backups/
