@@ -1,0 +1,48 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: puntual_dev_postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-puntual_dev}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-puntual_dev_pass}
+      POSTGRES_DB: ${POSTGRES_DB:-puntual_dev}
+    ports:
+      - "${POSTGRES_PORT:-5434}:5432"
+    volumes:
+      - postgres_dev_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-puntual_dev} -d ${POSTGRES_DB:-puntual_dev}"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+      start_period: 5s
+    networks:
+      - puntual_dev_network
+
+  redis:
+    image: redis:7-alpine
+    container_name: puntual_dev_redis
+    restart: unless-stopped
+    ports:
+      - "${REDIS_PORT:-6381}:6379"
+    volumes:
+      - redis_dev_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+      start_period: 3s
+    networks:
+      - puntual_dev_network
+
+volumes:
+  postgres_dev_data:
+    name: puntual_postgres_dev_data
+  redis_dev_data:
+    name: puntual_redis_dev_data
+
+networks:
+  puntual_dev_network:
+    name: puntual_dev_network
