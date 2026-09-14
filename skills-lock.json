@@ -1,0 +1,161 @@
+{
+  "version": 1,
+  "skills": {
+    "ci-cd": {
+      "source": "ahmedasmar/devops-claude-skills",
+      "sourceType": "github",
+      "skillPath": "ci-cd/skills/SKILL.md",
+      "computedHash": "d68298996c8d4b97011449fd1e16b31272f3f0b39301a443e90c1ad5177cb1cf"
+    },
+    "ci-cd-pipeline-patterns": {
+      "source": "manutej/luxor-claude-marketplace",
+      "sourceType": "github",
+      "skillPath": "plugins/luxor-devops-suite/skills/ci-cd-pipeline-patterns/SKILL.md",
+      "computedHash": "23205b8c7a7f6375c11f850932647d1c46e0e7338400bd4d895906dfe89389b8"
+    },
+    "docker-compose": {
+      "source": "bagelhole/devops-security-agent-skills",
+      "sourceType": "github",
+      "skillPath": "devops/containers/docker-compose/SKILL.md",
+      "computedHash": "442bd126b0266c01c41b2605ca17e43eea16b6283c55f10d8448b7c5b7c79fea"
+    },
+    "docker-development": {
+      "source": "alirezarezvani/claude-skills",
+      "sourceType": "github",
+      "skillPath": "engineering/docker-development/skills/docker-development/SKILL.md",
+      "computedHash": "1348ef1038327f51eb47b370a3da2a5e574f9a1097616f3d1bfa66570ad9a7e4"
+    },
+    "github-actions-debugger": {
+      "source": "sickn33/agentic-awesome-skills",
+      "sourceType": "github",
+      "skillPath": "skills/github-actions-debugger/SKILL.md",
+      "computedHash": "e9559cd7d1a281f8d57351ab656868b3758972b9f75211d6b1b4d26281588c75"
+    },
+    "infisical-agent": {
+      "source": "infisical/ai-skills",
+      "sourceType": "github",
+      "skillPath": "skills/infisical-agent/SKILL.md",
+      "computedHash": "38d202a6575c79bd39bc52bca91caea2bbadf070e161f9d0565ed745605b1839"
+    },
+    "infisical-api": {
+      "source": "infisical/ai-skills",
+      "sourceType": "github",
+      "skillPath": "skills/infisical-api/SKILL.md",
+      "computedHash": "7cdc33af5817bbf67000e1238f4f12b758763d484756bc7400b8a1fa9148d3cd"
+    },
+    "infisical-user-setup-guide": {
+      "source": "infisical/ai-skills",
+      "sourceType": "github",
+      "skillPath": "skills/infisical-setup/SKILL.md",
+      "computedHash": "60f95d8ef9a02a5539168dc7298ab7aa4607691d31ccf55bd8cc5ddd7ef092e8"
+    },
+    "nestjs-best-practices": {
+      "source": "kadajett/agent-nestjs-skills",
+      "sourceType": "github",
+      "skillPath": "skills/nestjs-best-practices/SKILL.md",
+      "computedHash": "29c326e77d1462ed9526996acae5da0cf4003146982abc8c67378f5dbad6b181"
+    },
+    "nestjs-expert": {
+      "source": "jeffallan/claude-skills",
+      "sourceType": "github",
+      "skillPath": "skills/nestjs-expert/SKILL.md",
+      "computedHash": "ad9fa965c867945f974d631ee290691f6ff14bf930390ca30e61679c8d854e4e"
+    },
+    "nestjs-testing-expert": {
+      "source": "shipshitdev/skills",
+      "sourceType": "github",
+      "skillPath": "skills/nestjs-testing-expert/SKILL.md",
+      "computedHash": "ff641cc4e0547be247f2f4133577f68551f8d74486cb084441cbf281a8bfc90f"
+    },
+    "nextjs-app-router-patterns": {
+      "source": "wshobson/agents",
+      "sourceType": "github",
+      "skillPath": "plugins/frontend-mobile-development/skills/nextjs-app-router-patterns/SKILL.md",
+      "computedHash": "3a46e9093baecb3a85819529ce05006f817663f48d9e872868c32ae6049c0d5c"
+    },
+    "prisma-cli": {
+      "source": "prisma/skills",
+      "sourceType": "github",
+      "skillPath": "prisma-cli/SKILL.md",
+      "computedHash": "b92e55aef78f6796d81433c44738a6733211a04c16e65cbad6d42c5f71092aab"
+    },
+    "prisma-client-api": {
+      "source": "prisma/skills",
+      "sourceType": "github",
+      "skillPath": "prisma-client-api/SKILL.md",
+      "computedHash": "5dcc0793337151efa73a444e5adbc7e1c24180778e83b4fe94c9109c391bd333"
+    },
+    "prisma-database-setup": {
+      "source": "prisma/skills",
+      "sourceType": "github",
+      "skillPath": "prisma-database-setup/SKILL.md",
+      "computedHash": "0911d9454bd48df3badd23a50fd90a280eabb15dcbd472c14e7b729075dadefb"
+    },
+    "redis-clustering": {
+      "source": "redis/agent-skills",
+      "sourceType": "github",
+      "skillPath": "skills/redis-clustering/SKILL.md",
+      "computedHash": "112d67bc6f29b3aeb69bf66c6eaa2aafbf79d952a55b2e6a218c21045ea2792a"
+    },
+    "redis-connections": {
+      "source": "redis/agent-skills",
+      "sourceType": "github",
+      "skillPath": "skills/redis-connections/SKILL.md",
+      "computedHash": "76dfa303eb4872e6fef13ca7d248dec6bfe6cafe3d8fb6d22f692cd2bb65bbea"
+    },
+    "redis-core": {
+      "source": "redis/agent-skills",
+      "sourceType": "github",
+      "skillPath": "skills/redis-core/SKILL.md",
+      "computedHash": "7805229f286490b074aa105bc9650060202e247764f09102b928421789380b63"
+    },
+    "redis-observability": {
+      "source": "redis/agent-skills",
+      "sourceType": "github",
+      "skillPath": "skills/redis-observability/SKILL.md",
+      "computedHash": "7cb1ae455d4de8a51d5b819811a562140327af71690d3ba965431b056a452bdc"
+    },
+    "redis-security": {
+      "source": "redis/agent-skills",
+      "sourceType": "github",
+      "skillPath": "skills/redis-security/SKILL.md",
+      "computedHash": "77817a4ed95a8e9a5952a2c8ce12f1966f1290161ac7e588e1ec054b6424e316"
+    },
+    "sent-webhook-engineer": {
+      "source": "sentdm/sent-plugin",
+      "sourceType": "github",
+      "skillPath": "skills/sent-webhook-engineer/SKILL.md",
+      "computedHash": "94b651f83a6c537c64d22c8964e93e8389a0f7f6daac66802e7a12f4345036cb"
+    },
+    "stripe-webhook-idempotency": {
+      "source": "josiahsiegel/claude-plugin-marketplace",
+      "sourceType": "github",
+      "skillPath": "plugins/stripe-billing-master/skills/stripe-webhook-idempotency/SKILL.md",
+      "computedHash": "a7adeb13697826163164694bac68ab6e4608f9622042f1515320dce849a46109"
+    },
+    "testing-api-for-broken-object-level-authorization": {
+      "source": "mukul975/anthropic-cybersecurity-skills",
+      "sourceType": "github",
+      "skillPath": "skills/testing-api-for-broken-object-level-authorization/SKILL.md",
+      "computedHash": "88915b3036b28da21fd7d08c3edc62216613cbce740284a9cccc0520a7987468"
+    },
+    "testing-for-broken-access-control": {
+      "source": "mukul975/anthropic-cybersecurity-skills",
+      "sourceType": "github",
+      "skillPath": "skills/testing-for-broken-access-control/SKILL.md",
+      "computedHash": "f8b50a573ef98cbabadd6d56af630ecfba84a12826a880b7306b60717f920ed2"
+    },
+    "vercel-react-best-practices": {
+      "source": "vercel-labs/agent-skills",
+      "sourceType": "github",
+      "skillPath": "skills/react-best-practices/SKILL.md",
+      "computedHash": "6b526d013e28073246a36f99b529bc43745d30832ecfa8217b359c34f260ca6b"
+    },
+    "web-meta-framework-nextjs": {
+      "source": "agents-inc/skills",
+      "sourceType": "github",
+      "skillPath": "src/skills/web-meta-framework-nextjs/SKILL.md",
+      "computedHash": "1f0da1b3946a32871d0ba3bd95670c35b36484c1f2348acc1eadf2702ade211b"
+    }
+  }
+}
