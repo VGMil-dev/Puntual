@@ -1,0 +1,31 @@
+{
+  "name": "puntual",
+  "version": "0.1.0",
+  "private": true,
+  "packageManager": "pnpm@11.25.0",
+  "scripts": {
+    "dev:api": "pnpm --filter @puntual/api dev",
+    "build:api": "pnpm --filter @puntual/api build",
+    "test": "pnpm --filter @puntual/api test",
+    "test:isolation": "pnpm --filter @puntual/api exec jest --config ./test/jest-e2e.json ./test/tenant-isolation.e2e-spec.ts --runInBand",
+    "test:e2e": "pnpm --filter @puntual/api test:e2e",
+    "lint:tenant": "node scripts/check-tenant-boundary.js",
+    "prisma:generate": "prisma generate",
+    "prisma:migrate:dev": "prisma migrate dev",
+    "prisma:migrate:deploy": "prisma migrate deploy",
+    "prisma:studio": "prisma studio",
+    "docker:dev:up": "docker compose up -d",
+    "docker:dev:down": "docker compose down",
+    "docker:staging:up": "docker compose -f docker-compose.staging.yml up -d",
+    "docker:staging:down": "docker compose -f docker-compose.staging.yml down"
+  },
+  "devDependencies": {
+    "@types/node": "^22.13.0",
+    "dotenv": "^16.4.7",
+    "prisma": "^6.4.1",
+    "typescript": "^5.7.3"
+  },
+  "dependencies": {
+    "@prisma/client": "^6.4.1"
+  }
+}
