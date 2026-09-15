@@ -1,4 +1,4 @@
-import { Injectable, Logger, OnModuleInit } from '@nestjs/common';
+import { Injectable, Logger, OnModuleInit, Optional } from '@nestjs/common';
 import { SecretStorePort } from '../secret-store.port';
 
 export interface InfisicalConfig {
@@ -25,7 +25,7 @@ export class InfisicalAdapter implements SecretStorePort, OnModuleInit {
   private accessToken?: string;
   private tokenExpiresAt?: number;
 
-  constructor(config?: InfisicalConfig) {
+  constructor(@Optional() config?: InfisicalConfig) {
     this.siteUrl = config?.siteUrl || process.env.INFISICAL_SITE_URL || 'https://app.infisical.com';
     this.clientId = config?.clientId || process.env.INFISICAL_CLIENT_ID;
     this.clientSecret = config?.clientSecret || process.env.INFISICAL_CLIENT_SECRET;
@@ -71,8 +71,11 @@ export class InfisicalAdapter implements SecretStorePort, OnModuleInit {
   }
 
   private shouldUseLocalFallback(): boolean {
-    // In local development, if Infisical client credentials are not provided, fallback to process.env
-    return this.nodeEnv === 'development' && (!this.clientId || !this.clientSecret);
+    // In local development or test, if Infisical credentials/project are not provided, fallback to process.env
+    return (
+      (this.nodeEnv === 'development' || this.nodeEnv === 'test') &&
+      (!this.clientId || !this.clientSecret || !this.projectId)
+    );
   }
 
   private async authenticate(): Promise<string> {

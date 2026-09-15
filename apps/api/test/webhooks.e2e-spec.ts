@@ -5,6 +5,7 @@ import * as crypto from 'crypto';
 import { WebhooksModule } from '../src/modules/webhooks/webhooks.module';
 import { RedisService } from '../src/infrastructure/redis/redis.service';
 import { PrismaService } from '../src/infrastructure/prisma/prisma.service';
+import { ChannelGatewayService } from '../src/modules/channels/channel-gateway.service';
 
 describe('Webhooks Gateway - Signature & Idempotency (E11.1 / RF-027 / RNF-011)', () => {
   let app: INestApplication;
@@ -25,6 +26,13 @@ describe('Webhooks Gateway - Signature & Idempotency (E11.1 / RF-027 / RNF-011)'
       }),
       get: jest.fn(async (key: string) => redisStorage.get(key) || null),
     }),
+    get: jest.fn(async (key: string) => redisStorage.get(key) || null),
+    set: jest.fn(async (key: string, value: string) => {
+      redisStorage.set(key, value);
+    }),
+    del: jest.fn(async (key: string) => {
+      redisStorage.delete(key);
+    }),
     isHealthy: jest.fn().mockResolvedValue(true),
   };
 
@@ -32,6 +40,10 @@ describe('Webhooks Gateway - Signature & Idempotency (E11.1 / RF-027 / RNF-011)'
     clinic: {
       findUnique: jest.fn().mockResolvedValue({ id: 'clinic-123', name: 'Clínica Test' }),
       findFirst: jest.fn().mockResolvedValue({ id: 'clinic-123', name: 'Clínica Test' }),
+    },
+    channelCredential: {
+      findUnique: jest.fn().mockResolvedValue(null),
+      findFirst: jest.fn().mockResolvedValue(null),
     },
     isHealthy: jest.fn().mockResolvedValue(true),
   };
@@ -159,6 +171,77 @@ describe('Webhooks Gateway - Signature & Idempotency (E11.1 / RF-027 / RNF-011)'
         eventId: 'wamid.HBgLM...',
         traceId: 'trace-meta-123',
         clinicId: 'clinic-123',
+      });
+    });
+
+    it('POST /webhooks/meta - verifies HMAC signature using clinic-specific appSecret (RF-027)', async () => {
+      const clinicPhoneId = 'PHONE_NUMBER_CUSTOM_CLINIC_99';
+      const clinicCustomSecret = 'clinic_custom_meta_secret_777777777';
+
+      const channelGateway = app.get(ChannelGatewayService);
+      jest.spyOn(channelGateway, 'getClinicChannelCredentials').mockImplementation(async (channelType, id) => {
+        if (id === clinicPhoneId) {
+          return {
+            clinicId: 'clinic-custom-99',
+            token: 'token_abc',
+            appSecret: clinicCustomSecret,
+          };
+        }
+        return null;
+      });
+
+      const payload = {
+        object: 'whatsapp_business_account',
+        entry: [
+          {
+            id: 'WHATSAPP_BUSINESS_ACCOUNT_ID',
+            changes: [
+              {
+                value: {
+                  messaging_product: 'whatsapp',
+                  metadata: {
+                    display_phone_number: '123456789',
+                    phone_number_id: clinicPhoneId,
+                  },
+                  messages: [
+                    {
+                      from: '593991234567',
+                      id: 'wamid.custom.999',
+                      timestamp: '1726230050',
+                      text: { body: 'Hola con mi secreto de clinica' },
+                      type: 'text',
+                    },
+                  ],
+                },
+                field: 'messages',
+              },
+            ],
+          },
+        ],
+      };
+
+      const rawBody = Buffer.from(JSON.stringify(payload));
+
+      // 1. Signed with global secret -> Rejection because this clinic configured its own secret
+      const globalSig = crypto.createHmac('sha256', TEST_META_APP_SECRET).update(rawBody).digest('hex');
+      await request(app.getHttpServer())
+        .post('/webhooks/meta')
+        .set('x-hub-signature-256', `sha256=${globalSig}`)
+        .send(payload)
+        .expect(401);
+
+      // 2. Signed with clinic's own appSecret -> Accepted (RF-027)
+      const clinicSig = crypto.createHmac('sha256', clinicCustomSecret).update(rawBody).digest('hex');
+      const res = await request(app.getHttpServer())
+        .post('/webhooks/meta')
+        .set('x-hub-signature-256', `sha256=${clinicSig}`)
+        .send(payload)
+        .expect(200);
+
+      expect(res.body).toMatchObject({
+        status: 'accepted',
+        eventId: 'wamid.custom.999',
+        clinicId: 'clinic-custom-99',
       });
     });
 

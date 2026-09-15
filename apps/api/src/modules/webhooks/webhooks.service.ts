@@ -2,7 +2,9 @@ import { Injectable, Logger } from '@nestjs/common';
 import * as crypto from 'crypto';
 import { RedisService } from '../../infrastructure/redis/redis.service';
 import { PrismaService } from '../../infrastructure/prisma/prisma.service';
+import { ChannelGatewayService } from '../channels/channel-gateway.service';
 import { NormalizedWebhookEvent, WebhookChannel } from './interfaces/normalized-event.interface';
+import { ChannelType } from '@prisma/client';
 
 @Injectable()
 export class WebhooksService {
@@ -14,6 +16,7 @@ export class WebhooksService {
   constructor(
     private readonly redisService: RedisService,
     private readonly prismaService: PrismaService,
+    private readonly channelGateway: ChannelGatewayService,
   ) {}
 
   /**
@@ -77,15 +80,29 @@ export class WebhooksService {
   }
 
   /**
+   * Resolves clinic channel credentials and secret for webhook verification (RF-027)
+   */
+  async resolveClinicSecret(channel: WebhookChannel, identifier: string): Promise<{ clinicId: string; secret: string } | null> {
+    const channelType = channel === 'meta' ? ChannelType.WHATSAPP : ChannelType.TELEGRAM;
+    const creds = await this.channelGateway.getClinicChannelCredentials(channelType, identifier);
+    if (!creds) {
+      return null;
+    }
+
+    const secret = creds.appSecret || creds.token;
+    return {
+      clinicId: creds.clinicId,
+      secret,
+    };
+  }
+
+  /**
    * Resolves clinicId by WhatsApp phone_number_id (Guía §11)
    */
   async resolveClinicByPhoneId(phoneNumberId: string): Promise<string | undefined> {
     if (!phoneNumberId) return undefined;
-    const clinic = await this.prismaService.clinic.findUnique({
-      where: { whatsappPhoneNumberId: phoneNumberId },
-      select: { id: true },
-    });
-    return clinic?.id;
+    const resolved = await this.channelGateway.resolveClinicByPhoneNumberId(phoneNumberId);
+    return resolved || undefined;
   }
 
   /**
@@ -93,6 +110,9 @@ export class WebhooksService {
    */
   async resolveClinicByTelegramToken(tokenHash: string): Promise<string | undefined> {
     if (!tokenHash) return undefined;
+    const resolved = await this.channelGateway.resolveClinicByTelegramIdentifier(tokenHash);
+    if (resolved) return resolved;
+
     const clinic = await this.prismaService.clinic.findFirst({
       where: { telegramBotTokenHash: tokenHash },
       select: { id: true },

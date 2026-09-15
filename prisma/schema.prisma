@@ -14,6 +14,17 @@ enum SubscriptionStatus {
   SUSPENDED
 }
 
+enum PlanType {
+  TRIAL
+  BASIC
+  PRO
+}
+
+enum ChannelType {
+  WHATSAPP
+  TELEGRAM
+}
+
 enum UserRole {
   SUPER_ADMIN
   CLINIC_ADMIN
@@ -48,46 +59,173 @@ model Clinic {
   doctors                    Doctor[]
   patients                   Patient[]
   appointments               Appointment[]
+  subscription               Subscription?
+  specialties                Specialty[]
+  doctorSchedules            DoctorSchedule[]
+  channelCredentials        ChannelCredential[]
+  operationalLogs            OperationalLog[]
 
   @@map("clinics")
 }
 
-model User {
-  id           String    @id @default(uuid())
-  clinicId     String?
-  email        String    @unique
-  passwordHash String
-  name         String
-  role         UserRole  @default(CLINIC_ADMIN)
-  createdAt    DateTime  @default(now())
-  updatedAt    DateTime  @updatedAt
+model Subscription {
+  id               String             @id @default(uuid())
+  clinicId         String             @unique
+  planType         PlanType           @default(TRIAL)
+  status           SubscriptionStatus @default(TRIAL)
+  trialEndsAt      DateTime?
+  currentPeriodEnd DateTime?
+  gracePeriodDays  Int                @default(5)
+  createdAt        DateTime           @default(now())
+  updatedAt        DateTime           @updatedAt
 
-  clinic       Clinic?   @relation(fields: [clinicId], references: [id], onDelete: Cascade)
-  doctor       Doctor?
+  clinic           Clinic             @relation(fields: [clinicId], references: [id], onDelete: Cascade)
+
+  @@map("subscriptions")
+}
+
+model User {
+  id                     String         @id @default(uuid())
+  clinicId               String?
+  email                  String         @unique
+  passwordHash           String
+  name                   String
+  role                   UserRole       @default(CLINIC_ADMIN)
+  passwordResetTokenHash String?
+  passwordResetExpiresAt DateTime?
+  createdAt              DateTime       @default(now())
+  updatedAt              DateTime       @updatedAt
+
+  clinic                 Clinic?        @relation(fields: [clinicId], references: [id], onDelete: Cascade)
+  doctor                 Doctor?
+  refreshTokens          RefreshToken[]
 
   @@index([clinicId])
   @@map("users")
 }
 
-model Doctor {
-  id                  String        @id @default(uuid())
-  clinicId            String
-  userId              String?       @unique
-  name                String
-  email               String?
-  specialties         String[]      @default([])
-  googleCalendarId    String?
-  slotDurationMinutes Int?
-  maxConcurrentHolds  Int?
-  createdAt           DateTime      @default(now())
-  updatedAt           DateTime      @updatedAt
+model RefreshToken {
+  id        String    @id @default(uuid())
+  userId    String
+  tokenHash String    @unique
+  expiresAt DateTime
+  revokedAt DateTime?
+  createdAt DateTime  @default(now())
 
-  clinic              Clinic        @relation(fields: [clinicId], references: [id], onDelete: Cascade)
-  user                User?         @relation(fields: [userId], references: [id], onDelete: SetNull)
-  appointments        Appointment[]
+  user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@map("refresh_tokens")
+}
+
+model Doctor {
+  id                            String            @id @default(uuid())
+  clinicId                      String
+  userId                        String?           @unique
+  name                          String
+  email                         String?
+  specialties                   String[]          @default([])
+  googleCalendarId              String?
+  googleRefreshTokenCipher      String?
+  googleCalendarWriteVerifiedAt DateTime?
+  slotDurationMinutes           Int?
+  maxConcurrentHolds            Int?
+  createdAt                     DateTime          @default(now())
+  updatedAt                     DateTime          @updatedAt
+
+  clinic                        Clinic            @relation(fields: [clinicId], references: [id], onDelete: Cascade)
+  user                          User?             @relation(fields: [userId], references: [id], onDelete: SetNull)
+  appointments                  Appointment[]
+  doctorSpecialties             DoctorSpecialty[]
+  schedules                     DoctorSchedule[]
 
   @@index([clinicId])
   @@map("doctors")
+}
+
+model Specialty {
+  id                         String            @id @default(uuid())
+  clinicId                   String
+  name                       String
+  defaultSlotDurationMinutes Int               @default(30)
+  createdAt                  DateTime          @default(now())
+  updatedAt                  DateTime          @updatedAt
+
+  clinic                     Clinic            @relation(fields: [clinicId], references: [id], onDelete: Cascade)
+  doctorSpecialties          DoctorSpecialty[]
+
+  @@unique([clinicId, name])
+  @@index([clinicId])
+  @@map("specialties")
+}
+
+model DoctorSpecialty {
+  id          String    @id @default(uuid())
+  doctorId    String
+  specialtyId String
+  createdAt   DateTime  @default(now())
+
+  doctor      Doctor    @relation(fields: [doctorId], references: [id], onDelete: Cascade)
+  specialty   Specialty @relation(fields: [specialtyId], references: [id], onDelete: Cascade)
+
+  @@unique([doctorId, specialtyId])
+  @@map("doctor_specialties")
+}
+
+model DoctorSchedule {
+  id                  String   @id @default(uuid())
+  clinicId            String
+  doctorId            String
+  dayOfWeek           Int      // 0 = Sunday, 1 = Monday, ..., 6 = Saturday
+  startTime           String   // "HH:mm", e.g. "09:00"
+  endTime             String   // "HH:mm", e.g. "18:00"
+  slotDurationMinutes Int?
+  createdAt           DateTime @default(now())
+  updatedAt           DateTime @updatedAt
+
+  clinic              Clinic   @relation(fields: [clinicId], references: [id], onDelete: Cascade)
+  doctor              Doctor   @relation(fields: [doctorId], references: [id], onDelete: Cascade)
+
+  @@index([clinicId])
+  @@index([doctorId])
+  @@map("doctor_schedules")
+}
+
+model ChannelCredential {
+  id             String      @id @default(uuid())
+  clinicId       String
+  channelType    ChannelType
+  identifier     String      // phone_number_id for WhatsApp, bot_username for Telegram
+  encryptedToken String
+  isActive       Boolean     @default(true)
+  createdAt      DateTime    @default(now())
+  updatedAt      DateTime    @updatedAt
+
+  clinic         Clinic      @relation(fields: [clinicId], references: [id], onDelete: Cascade)
+
+  @@unique([channelType, identifier])
+  @@index([clinicId])
+  @@map("channel_credentials")
+}
+
+model OperationalLog {
+  id             String   @id @default(uuid())
+  traceId        String
+  clinicId       String?
+  conversationId String?
+  level          String   // "info", "warn", "error"
+  category       String   // "auth", "channel_gateway", "ai", "calendar"
+  message        String
+  metadata       Json?
+  latencyMs      Int?
+  createdAt      DateTime @default(now())
+
+  clinic         Clinic?  @relation(fields: [clinicId], references: [id], onDelete: SetNull)
+
+  @@index([traceId])
+  @@index([clinicId])
+  @@index([category, createdAt])
+  @@map("operational_logs")
 }
 
 model Patient {
