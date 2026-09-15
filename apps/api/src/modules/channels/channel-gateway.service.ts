@@ -9,6 +9,14 @@ import { ChannelType } from '@prisma/client';
 export class ChannelGatewayService {
   private readonly cacheTtlSeconds = 300; // 5 minutes cache in Redis
 
+  static getWhatsAppCacheKey(phoneNumberId: string): string {
+    return `gateway:whatsapp:${phoneNumberId}:clinicId`;
+  }
+
+  static getTelegramCacheKey(identifier: string): string {
+    return `gateway:telegram:${identifier}:clinicId`;
+  }
+
   constructor(
     private readonly prisma: PrismaService,
     private readonly redis: RedisService,
@@ -17,7 +25,7 @@ export class ChannelGatewayService {
   ) {}
 
   async resolveClinicByPhoneNumberId(phoneNumberId: string): Promise<string | null> {
-    const cacheKey = `gateway:whatsapp:${phoneNumberId}:clinicId`;
+    const cacheKey = ChannelGatewayService.getWhatsAppCacheKey(phoneNumberId);
     const cachedClinicId = await this.redis.get(cacheKey);
     if (cachedClinicId) {
       return cachedClinicId;
@@ -53,7 +61,7 @@ export class ChannelGatewayService {
   }
 
   async resolveClinicByTelegramIdentifier(identifier: string): Promise<string | null> {
-    const cacheKey = `gateway:telegram:${identifier}:clinicId`;
+    const cacheKey = ChannelGatewayService.getTelegramCacheKey(identifier);
     const cachedClinicId = await this.redis.get(cacheKey);
     if (cachedClinicId) {
       return cachedClinicId;
@@ -76,6 +84,52 @@ export class ChannelGatewayService {
     return null;
   }
 
+  async getClinicChannelCredentials(
+    channelType: ChannelType,
+    identifier: string,
+  ): Promise<{ clinicId: string; token: string; appSecret?: string } | null> {
+    const cred = await this.prisma.channelCredential.findUnique({
+      where: {
+        channelType_identifier: {
+          channelType,
+          identifier,
+        },
+      },
+    });
+
+    if (!cred || !cred.isActive) {
+      return null;
+    }
+
+    try {
+      const decrypted = this.channelsService.decryptToken(cred.encryptedToken);
+      try {
+        const parsed = JSON.parse(decrypted);
+        if (parsed && typeof parsed === 'object' && parsed.token) {
+          return {
+            clinicId: cred.clinicId,
+            token: parsed.token,
+            appSecret: parsed.appSecret,
+          };
+        }
+      } catch {
+        // Not a JSON payload, pure token
+      }
+
+      return {
+        clinicId: cred.clinicId,
+        token: decrypted,
+      };
+    } catch (err: any) {
+      this.logger.error(
+        `Failed to decrypt channel credentials for ${channelType}:${identifier}: ${err.message}`,
+        err.stack,
+        'ChannelGatewayService',
+      );
+      return null;
+    }
+  }
+
   async getDecryptedTokenForClinic(clinicId: string, channelType: ChannelType): Promise<string | null> {
     const cred = await this.prisma.channelCredential.findFirst({
       where: {
@@ -90,7 +144,16 @@ export class ChannelGatewayService {
     }
 
     try {
-      return this.channelsService.decryptToken(cred.encryptedToken);
+      const decrypted = this.channelsService.decryptToken(cred.encryptedToken);
+      try {
+        const parsed = JSON.parse(decrypted);
+        if (parsed && typeof parsed === 'object' && parsed.token) {
+          return parsed.token;
+        }
+      } catch {
+        // pure string token
+      }
+      return decrypted;
     } catch (err: any) {
       this.logger.error(`Failed to decrypt channel token for clinic ${clinicId}: ${err.message}`, err.stack, 'ChannelGatewayService');
       return null;

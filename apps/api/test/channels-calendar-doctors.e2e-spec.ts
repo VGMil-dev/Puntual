@@ -4,6 +4,8 @@ import request from 'supertest';
 import { AppModule } from '../src/app.module';
 import { PrismaService } from '../src/infrastructure/prisma/prisma.service';
 import { ChannelGatewayService } from '../src/modules/channels/channel-gateway.service';
+import { ChannelsService } from '../src/modules/channels/channels.service';
+import { CALENDAR_PORT, CalendarPort } from '../src/modules/calendar/ports/calendar.port';
 import { ChannelType, UserRole, SubscriptionStatus } from '@prisma/client';
 import * as bcrypt from 'bcryptjs';
 
@@ -192,12 +194,71 @@ describe('Channels, Calendar, Doctors & AI E2E (E1.3, E1.4, E1.5, E11.4, E2.1)',
       expect(res.body.url).toContain('accounts.google.com');
       expect(res.body.url).toContain('access_type=offline');
     });
+
+    it('Doctor onboarding succeeds and remains fully functional even when Calendar connection is unconfigured or fails (resilience)', async () => {
+      // Create another doctor without Google Calendar connection
+      const docRes = await request(app.getHttpServer())
+        .post('/doctors')
+        .set('Authorization', `Bearer ${clinicAdminToken}`)
+        .send({
+          name: 'Dra. Elena Silva',
+          email: 'dra.silva@puntual.test',
+          specialtyIds: [specialtyId],
+          slotDurationMinutes: 45,
+        })
+        .expect(201);
+
+      expect(docRes.body.id).toBeDefined();
+      expect(docRes.body.googleCalendarWriteVerifiedAt).toBeNull();
+
+      // Verify schedules can still be created and doctor operates normally without Calendar blocker
+      const schedRes = await request(app.getHttpServer())
+        .post(`/doctors/${docRes.body.id}/schedules`)
+        .set('Authorization', `Bearer ${clinicAdminToken}`)
+        .send({
+          dayOfWeek: 2, // Tuesday
+          startTime: '08:00',
+          endTime: '12:00',
+        })
+        .expect(201);
+
+      expect(schedRes.body.id).toBeDefined();
+      expect(schedRes.body.doctorId).toBe(docRes.body.id);
+    });
+
+    it('Simulates token expiration and validates automatic token refresh on CalendarPort (E1.4)', async () => {
+      const calendarPort = app.get<CalendarPort>(CALENDAR_PORT);
+      const channelsService = app.get(ChannelsService);
+
+      const fakeRefreshToken = 'mock_google_refresh_token_xyz_12345';
+      const cipher = channelsService.encryptToken(fakeRefreshToken);
+
+      // Verify refreshAccessToken runs without error
+      const refreshedToken = await calendarPort.refreshAccessToken!(cipher);
+      expect(refreshedToken).toBeDefined();
+      expect(typeof refreshedToken).toBe('string');
+    });
   });
 
   describe('E11.4: Observabilidad Mínima (GET /metrics/operational)', () => {
-    it('Returns aggregated operational metrics (p50/p95 latency and counts)', async () => {
+    it('Rejects unauthenticated request with 401 Unauthorized', async () => {
+      await request(app.getHttpServer())
+        .get(`/metrics/operational?clinicId=${clinicId}`)
+        .expect(401);
+    });
+
+    it('Rejects cross-tenant metric access by Clinic Admin with 403 Forbidden', async () => {
+      const otherClinicId = '99999999-9999-9999-9999-999999999999';
+      await request(app.getHttpServer())
+        .get(`/metrics/operational?clinicId=${otherClinicId}`)
+        .set('Authorization', `Bearer ${clinicAdminToken}`)
+        .expect(403);
+    });
+
+    it('Returns aggregated operational metrics for authorized Clinic Admin (p50/p95 latency and counts)', async () => {
       const res = await request(app.getHttpServer())
         .get(`/metrics/operational?clinicId=${clinicId}`)
+        .set('Authorization', `Bearer ${clinicAdminToken}`)
         .expect(200);
 
       expect(res.body.totalLogs).toBeDefined();

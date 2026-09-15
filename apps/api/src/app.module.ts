@@ -7,6 +7,7 @@ import { LoggingModule } from './infrastructure/logging/logging.module';
 import { TraceIdInterceptor } from './infrastructure/logging/trace-id.interceptor';
 import { HealthModule } from './modules/health/health.module';
 import { InfisicalModule } from './integrations/secrets/infisical/infisical.module';
+import { EmailModule } from './integrations/email/email.module';
 import { WebhooksModule } from './modules/webhooks/webhooks.module';
 import { AuthModule } from './modules/auth/auth.module';
 import { ClinicsModule } from './modules/clinics/clinics.module';
@@ -14,6 +15,7 @@ import { ChannelsModule } from './modules/channels/channels.module';
 import { CalendarModule } from './modules/calendar/calendar.module';
 import { DoctorsModule } from './modules/doctors/doctors.module';
 import { AiModule } from './modules/ai/ai.module';
+import { MetricsModule } from './modules/metrics/metrics.module';
 
 @Module({
   imports: [
@@ -26,6 +28,7 @@ import { AiModule } from './modules/ai/ai.module';
     RedisModule,
     HealthModule,
     InfisicalModule,
+    EmailModule,
     AuthModule,
     ClinicsModule,
     ChannelsModule,
@@ -33,6 +36,7 @@ import { AiModule } from './modules/ai/ai.module';
     DoctorsModule,
     AiModule,
     WebhooksModule,
+    MetricsModule,
   ],
   providers: [
     {
@@ -42,3 +46,4 @@ import { AiModule } from './modules/ai/ai.module';
   ],
 })
 export class AppModule {}
+

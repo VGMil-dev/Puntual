@@ -4,6 +4,7 @@ import { RedisService } from '../../infrastructure/redis/redis.service';
 import { PrismaService } from '../../infrastructure/prisma/prisma.service';
 import { ChannelGatewayService } from '../channels/channel-gateway.service';
 import { NormalizedWebhookEvent, WebhookChannel } from './interfaces/normalized-event.interface';
+import { ChannelType } from '@prisma/client';
 
 @Injectable()
 export class WebhooksService {
@@ -76,6 +77,23 @@ export class WebhooksService {
     // NX sets the key only if it does not already exist
     const result = await client.set(key, 'processed', 'EX', this.DEDUP_TTL_SECONDS, 'NX');
     return result === null;
+  }
+
+  /**
+   * Resolves clinic channel credentials and secret for webhook verification (RF-027)
+   */
+  async resolveClinicSecret(channel: WebhookChannel, identifier: string): Promise<{ clinicId: string; secret: string } | null> {
+    const channelType = channel === 'meta' ? ChannelType.WHATSAPP : ChannelType.TELEGRAM;
+    const creds = await this.channelGateway.getClinicChannelCredentials(channelType, identifier);
+    if (!creds) {
+      return null;
+    }
+
+    const secret = creds.appSecret || creds.token;
+    return {
+      clinicId: creds.clinicId,
+      secret,
+    };
   }
 
   /**

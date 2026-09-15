@@ -1,11 +1,13 @@
 import {
   BadRequestException,
+  Inject,
   Injectable,
   UnauthorizedException,
 } from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt';
 import { PrismaService } from '../../infrastructure/prisma/prisma.service';
 import { StructuredLoggerService } from '../../infrastructure/logging/structured-logger.service';
+import { EMAIL_PORT, EmailPort } from '../../integrations/email/email.port';
 import { LoginDto } from './dto/login.dto';
 import { RefreshTokenDto } from './dto/refresh-token.dto';
 import { ForgotPasswordDto } from './dto/forgot-password.dto';
@@ -23,6 +25,7 @@ export class AuthService {
     private readonly prisma: PrismaService,
     private readonly jwtService: JwtService,
     private readonly logger: StructuredLoggerService,
+    @Inject(EMAIL_PORT) private readonly emailPort: EmailPort,
   ) {}
 
   private hashToken(token: string): string {
@@ -193,7 +196,18 @@ export class AuthService {
         { userId: user.id, clinicId: user.clinicId },
       );
 
-      // In production, dispatch email here. In dev/test return preview token in debug mode if needed
+      // Dispatch password reset email via EmailPort (RF-026)
+      const resetUrl = process.env.APP_URL
+        ? `${process.env.APP_URL}/reset-password?token=${resetToken}`
+        : `https://app.puntual.ec/reset-password?token=${resetToken}`;
+
+      await this.emailPort.sendEmail({
+        to: user.email,
+        subject: 'Recuperación de contraseña - Puntual',
+        html: `<p>Hola ${user.name || 'Usuario'},</p><p>Has solicitado restablecer tu contraseña en Puntual.</p><p>Para continuar, haz clic en el siguiente enlace:</p><p><a href="${resetUrl}">${resetUrl}</a></p><p>Este enlace expirará en 1 hora.</p>`,
+        text: `Hola ${user.name || 'Usuario'},\n\nPara restablecer tu contraseña en Puntual ingresa a: ${resetUrl}\n\nEste enlace expira en 1 hora.`,
+      });
+
       return {
         message: 'If the email exists, a password reset link has been dispatched',
         resetToken: process.env.NODE_ENV !== 'production' ? resetToken : undefined,
@@ -283,6 +297,18 @@ export class AuthService {
     this.logger.log(`Clinic Admin created: ${user.id} for clinic: ${dto.clinicId}`, 'AuthService', {
       userId: user.id,
       clinicId: dto.clinicId,
+    });
+
+    // Dispatch invitation email via EmailPort (RF-026)
+    const loginUrl = process.env.APP_URL
+      ? `${process.env.APP_URL}/login`
+      : 'https://app.puntual.ec/login';
+
+    await this.emailPort.sendEmail({
+      to: user.email,
+      subject: 'Invitación como Administrador de Clínica - Puntual',
+      html: `<p>Hola ${user.name},</p><p>Has sido registrado como Administrador de Clínica en Puntual.</p><p>Tus credenciales de acceso son:</p><ul><li>Email: ${user.email}</li><li>Contraseña: ${plainPassword}</li></ul><p>Inicia sesión aquí: <a href="${loginUrl}">${loginUrl}</a></p>`,
+      text: `Hola ${user.name},\n\nHas sido registrado como Administrador de Clínica en Puntual.\nEmail: ${user.email}\nContraseña: ${plainPassword}\nInicia sesión en: ${loginUrl}`,
     });
 
     return {

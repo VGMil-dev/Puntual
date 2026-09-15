@@ -13,6 +13,7 @@ import {
   SecretStorePort,
 } from '../../integrations/secrets/secret-store.port';
 import { SaveChannelCredentialsDto } from './dto/save-channel-credentials.dto';
+import { ChannelGatewayService } from './channel-gateway.service';
 import * as crypto from 'crypto';
 import { ChannelType } from '@prisma/client';
 
@@ -27,10 +28,12 @@ export class ChannelsService {
     private readonly logger: StructuredLoggerService,
     @Inject(SECRET_STORE_PORT) private readonly secretStore: SecretStorePort,
   ) {
-    const rawKey =
-      process.env.ENCRYPTION_KEY ||
-      process.env.JWT_SECRET ||
-      'puntual-sprint2-default-aes-key-must-be-32-chars!!';
+    const rawKey = process.env.ENCRYPTION_KEY;
+    if (!rawKey || rawKey.length < 32) {
+      throw new Error(
+        'ENCRYPTION_KEY environment variable is required and must be at least 32 characters long (RNF-012)',
+      );
+    }
     this.encryptionKey = crypto.createHash('sha256').update(rawKey).digest();
   }
 
@@ -58,8 +61,11 @@ export class ChannelsService {
   }
 
   async saveCredentials(clinicId: string, dto: SaveChannelCredentialsDto) {
-    // Encrypt token before persisting
-    const encryptedToken = this.encryptToken(dto.token);
+    // Encrypt token (and optional appSecret) before persisting
+    const payloadToEncrypt = dto.appSecret
+      ? JSON.stringify({ token: dto.token, appSecret: dto.appSecret })
+      : dto.token;
+    const encryptedToken = this.encryptToken(payloadToEncrypt);
 
     // Upsert credential for this channel and identifier
     const credential = await this.prisma.channelCredential.upsert({
@@ -91,11 +97,11 @@ export class ChannelsService {
       });
     }
 
-    // Invalidate cached gateway resolution
+    // Invalidate cached gateway resolution with aligned keys (E1.3)
     if (dto.channelType === ChannelType.WHATSAPP) {
-      await this.redis.del(`gateway:phone:${dto.identifier}`);
+      await this.redis.del(ChannelGatewayService.getWhatsAppCacheKey(dto.identifier));
     } else if (dto.channelType === ChannelType.TELEGRAM) {
-      await this.redis.del(`gateway:telegram:${dto.identifier}`);
+      await this.redis.del(ChannelGatewayService.getTelegramCacheKey(dto.identifier));
     }
 
     this.logger.log(
@@ -147,9 +153,9 @@ export class ChannelsService {
     await this.prisma.channelCredential.delete({ where: { id } });
 
     if (cred.channelType === ChannelType.WHATSAPP) {
-      await this.redis.del(`gateway:phone:${cred.identifier}`);
+      await this.redis.del(ChannelGatewayService.getWhatsAppCacheKey(cred.identifier));
     } else if (cred.channelType === ChannelType.TELEGRAM) {
-      await this.redis.del(`gateway:telegram:${cred.identifier}`);
+      await this.redis.del(ChannelGatewayService.getTelegramCacheKey(cred.identifier));
     }
 
     return { message: 'Channel credential removed successfully' };

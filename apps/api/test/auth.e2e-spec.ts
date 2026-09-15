@@ -3,12 +3,14 @@ import { INestApplication, ValidationPipe } from '@nestjs/common';
 import request from 'supertest';
 import { AppModule } from '../src/app.module';
 import { PrismaService } from '../src/infrastructure/prisma/prisma.service';
+import { SmtpEmailAdapter } from '../src/integrations/email/adapters/smtp-email.adapter';
 import { UserRole, PlanType, SubscriptionStatus } from '@prisma/client';
 import * as bcrypt from 'bcryptjs';
 
 describe('Auth & Clinic Onboarding E2E (E1.1 / E1.2 / DoD §10)', () => {
   let app: INestApplication;
   let prisma: PrismaService;
+  let emailAdapter: SmtpEmailAdapter;
 
   let superAdminToken: string;
   let clinicAlfaAdminToken: string;
@@ -37,6 +39,8 @@ describe('Auth & Clinic Onboarding E2E (E1.1 / E1.2 / DoD §10)', () => {
     await app.init();
 
     prisma = app.get(PrismaService);
+    emailAdapter = app.get(SmtpEmailAdapter);
+    emailAdapter.clearSentEmails();
 
     // Cleanup existing fixtures
     await prisma.refreshToken.deleteMany({
@@ -121,6 +125,13 @@ describe('Auth & Clinic Onboarding E2E (E1.1 / E1.2 / DoD §10)', () => {
       expect(res.body.admin.email).toBe(clinicAlfaAdminEmail);
 
       clinicAlfaId = res.body.clinic.id;
+
+      // Verify invitation email was dispatched (RF-026)
+      const sent = emailAdapter.getSentEmails();
+      const invite = sent.find((e) => e.to === clinicAlfaAdminEmail);
+      expect(invite).toBeDefined();
+      expect(invite?.subject).toContain('Invitación');
+      expect(invite?.html).toContain('login');
     });
 
     it('Super Admin creates Clinic Beta with plan PRO', async () => {
@@ -220,6 +231,13 @@ describe('Auth & Clinic Onboarding E2E (E1.1 / E1.2 / DoD §10)', () => {
 
       const resetToken = forgotRes.body.resetToken;
       expect(resetToken).toBeDefined();
+
+      // Verify recovery email was dispatched (RF-026)
+      const recoveryEmails = emailAdapter
+        .getSentEmails()
+        .filter((e) => e.to === clinicAlfaAdminEmail && e.subject.includes('Recuperación'));
+      expect(recoveryEmails.length).toBeGreaterThan(0);
+      expect(recoveryEmails[0].html).toContain(`reset-password?token=${resetToken}`);
 
       const newPassword = 'NewSecretPassword2026!';
 

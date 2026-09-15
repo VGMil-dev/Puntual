@@ -39,4 +39,9 @@ export interface CalendarPort {
    * Deletes or cancels an existing event
    */
   deleteEvent(eventId: string, calendarId: string, refreshTokenCipher: string): Promise<void>;
+
+  /**
+   * Refreshes an expired OAuth access token using the stored encrypted refresh token (E1.4)
+   */
+  refreshAccessToken?(refreshTokenCipher: string): Promise<string>;
 }

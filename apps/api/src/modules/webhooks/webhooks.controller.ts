@@ -65,12 +65,28 @@ export class WebhooksController {
 
     const typedChannel = channel as WebhookChannel;
 
-    // 1. Signature / Secret verification BEFORE any processing (RF-027)
+    // 1. Signature / Secret verification with per-clinic secret resolution (RF-027)
+    let clinicId: string | undefined;
+    const rawBody = req.rawBody || Buffer.from(JSON.stringify(req.body || {}));
+
     if (typedChannel === 'meta') {
       const signatureHeader = req.headers['x-hub-signature-256'] as string;
-      const appSecret = process.env.META_APP_SECRET || 'test_meta_app_secret';
+      const phoneNumberId = req.body?.entry?.[0]?.changes?.[0]?.value?.metadata?.phone_number_id;
 
-      const rawBody = req.rawBody || Buffer.from(JSON.stringify(req.body || {}));
+      let appSecret = process.env.META_APP_SECRET || 'test_meta_app_secret';
+
+      if (phoneNumberId) {
+        const clinicSecretInfo = await this.webhooksService.resolveClinicSecret('meta', phoneNumberId);
+        if (clinicSecretInfo) {
+          clinicId = clinicSecretInfo.clinicId;
+          if (clinicSecretInfo.secret) {
+            appSecret = clinicSecretInfo.secret;
+          }
+        } else {
+          clinicId = await this.webhooksService.resolveClinicByPhoneId(phoneNumberId);
+        }
+      }
+
       const isValid = this.webhooksService.verifyMetaSignature(rawBody, signatureHeader, appSecret);
 
       if (!isValid) {
@@ -80,6 +96,7 @@ export class WebhooksController {
             channel: 'meta',
             reason: 'invalid_signature',
             traceId,
+            clinicId,
           }),
         );
         return res.status(HttpStatus.UNAUTHORIZED).json({
@@ -89,7 +106,20 @@ export class WebhooksController {
       }
     } else if (typedChannel === 'telegram') {
       const secretTokenHeader = req.headers['x-telegram-bot-api-secret-token'] as string;
-      const expectedToken = process.env.TELEGRAM_SECRET_TOKEN || 'test_telegram_secret_token';
+      const tokenHash = req.headers['x-telegram-bot-token-hash'] as string;
+      let expectedToken = process.env.TELEGRAM_SECRET_TOKEN || 'test_telegram_secret_token';
+
+      if (tokenHash) {
+        const clinicSecretInfo = await this.webhooksService.resolveClinicSecret('telegram', tokenHash);
+        if (clinicSecretInfo) {
+          clinicId = clinicSecretInfo.clinicId;
+          if (clinicSecretInfo.secret) {
+            expectedToken = clinicSecretInfo.secret;
+          }
+        } else {
+          clinicId = await this.webhooksService.resolveClinicByTelegramToken(tokenHash);
+        }
+      }
 
       const isValid = this.webhooksService.verifyTelegramSecretToken(secretTokenHeader, expectedToken);
 
@@ -100,6 +130,7 @@ export class WebhooksController {
             channel: 'telegram',
             reason: 'invalid_secret_token',
             traceId,
+            clinicId,
           }),
         );
         return res.status(HttpStatus.FORBIDDEN).json({
@@ -109,21 +140,12 @@ export class WebhooksController {
       }
     }
 
-    // 2. Resolve Clinic & Normalize Event (Guía §11)
-    let clinicId: string | undefined;
+    // 2. Normalize Event (Guía §11)
     let normalizedEvent = null;
 
     if (typedChannel === 'meta') {
-      const phoneNumberId = req.body?.entry?.[0]?.changes?.[0]?.value?.metadata?.phone_number_id;
-      if (phoneNumberId) {
-        clinicId = await this.webhooksService.resolveClinicByPhoneId(phoneNumberId);
-      }
       normalizedEvent = this.webhooksService.normalizeMetaPayload(req.body, traceId, clinicId);
     } else if (typedChannel === 'telegram') {
-      const tokenHash = req.headers['x-telegram-bot-token-hash'] as string;
-      if (tokenHash) {
-        clinicId = await this.webhooksService.resolveClinicByTelegramToken(tokenHash);
-      }
       normalizedEvent = this.webhooksService.normalizeTelegramPayload(req.body, traceId, clinicId);
     }
 

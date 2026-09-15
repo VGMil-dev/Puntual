@@ -5,7 +5,7 @@ import { AuthService } from './auth.service';
 import { AuthController } from './auth.controller';
 import { JwtStrategy } from './strategies/jwt.strategy';
 import { RolesGuard } from './guards/roles.guard';
-import { LoggingModule } from '../../infrastructure/logging/logging.module';
+import { EmailModule } from '../../integrations/email/email.module';
 
 @Module({
   imports: [
@@ -14,7 +14,7 @@ import { LoggingModule } from '../../infrastructure/logging/logging.module';
       secret: process.env.JWT_SECRET || 'puntual-sprint2-jwt-super-secret-key-change-in-prod',
       signOptions: { expiresIn: '15m' },
     }),
-    LoggingModule,
+    EmailModule,
   ],
   controllers: [AuthController],
   providers: [AuthService, JwtStrategy, RolesGuard],
