@@ -25,6 +25,13 @@ describe('Webhooks Gateway - Signature & Idempotency (E11.1 / RF-027 / RNF-011)'
       }),
       get: jest.fn(async (key: string) => redisStorage.get(key) || null),
     }),
+    get: jest.fn(async (key: string) => redisStorage.get(key) || null),
+    set: jest.fn(async (key: string, value: string) => {
+      redisStorage.set(key, value);
+    }),
+    del: jest.fn(async (key: string) => {
+      redisStorage.delete(key);
+    }),
     isHealthy: jest.fn().mockResolvedValue(true),
   };
 
@@ -32,6 +39,10 @@ describe('Webhooks Gateway - Signature & Idempotency (E11.1 / RF-027 / RNF-011)'
     clinic: {
       findUnique: jest.fn().mockResolvedValue({ id: 'clinic-123', name: 'Clínica Test' }),
       findFirst: jest.fn().mockResolvedValue({ id: 'clinic-123', name: 'Clínica Test' }),
+    },
+    channelCredential: {
+      findUnique: jest.fn().mockResolvedValue(null),
+      findFirst: jest.fn().mockResolvedValue(null),
     },
     isHealthy: jest.fn().mockResolvedValue(true),
   };

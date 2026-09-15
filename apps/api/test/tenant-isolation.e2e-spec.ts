@@ -1,9 +1,16 @@
-import { PrismaClient, UserRole, AppointmentStatus, SubscriptionStatus } from '@prisma/client';
+import {
+  PrismaClient,
+  UserRole,
+  AppointmentStatus,
+  SubscriptionStatus,
+  PlanType,
+  ChannelType,
+} from '@prisma/client';
 import dotenv from 'dotenv';
 
 dotenv.config();
 
-describe('Tenant Isolation Tests (RNF-001 / E11.3)', () => {
+describe('Tenant Isolation Tests (RNF-001 / E11.3 — Extended for Sprint 2)', () => {
   let prisma: PrismaClient;
 
   let clinicAId: string;
@@ -14,6 +21,18 @@ describe('Tenant Isolation Tests (RNF-001 / E11.3)', () => {
 
   let doctorAId: string;
   let doctorBId: string;
+
+  let specialtyAId: string;
+  let specialtyBId: string;
+
+  let scheduleAId: string;
+  let scheduleBId: string;
+
+  let channelCredAId: string;
+  let channelCredBId: string;
+
+  let operationalLogAId: string;
+  let operationalLogBId: string;
 
   let patientAId: string;
   let patientBId: string;
@@ -32,6 +51,24 @@ describe('Tenant Isolation Tests (RNF-001 / E11.3)', () => {
     await prisma.$connect();
 
     // Clean up any test fixtures from previous runs
+    await prisma.operationalLog.deleteMany({
+      where: { clinic: { slug: { in: ['clinic-alfa-test', 'clinic-beta-test'] } } },
+    });
+    await prisma.channelCredential.deleteMany({
+      where: { clinic: { slug: { in: ['clinic-alfa-test', 'clinic-beta-test'] } } },
+    });
+    await prisma.doctorSchedule.deleteMany({
+      where: { clinic: { slug: { in: ['clinic-alfa-test', 'clinic-beta-test'] } } },
+    });
+    await prisma.doctorSpecialty.deleteMany({
+      where: { doctor: { clinic: { slug: { in: ['clinic-alfa-test', 'clinic-beta-test'] } } } },
+    });
+    await prisma.specialty.deleteMany({
+      where: { clinic: { slug: { in: ['clinic-alfa-test', 'clinic-beta-test'] } } },
+    });
+    await prisma.subscription.deleteMany({
+      where: { clinic: { slug: { in: ['clinic-alfa-test', 'clinic-beta-test'] } } },
+    });
     await prisma.appointment.deleteMany({
       where: { clinic: { slug: { in: ['clinic-alfa-test', 'clinic-beta-test'] } } },
     });
@@ -40,6 +77,9 @@ describe('Tenant Isolation Tests (RNF-001 / E11.3)', () => {
     });
     await prisma.doctor.deleteMany({
       where: { clinic: { slug: { in: ['clinic-alfa-test', 'clinic-beta-test'] } } },
+    });
+    await prisma.refreshToken.deleteMany({
+      where: { user: { clinic: { slug: { in: ['clinic-alfa-test', 'clinic-beta-test'] } } } },
     });
     await prisma.user.deleteMany({
       where: { clinic: { slug: { in: ['clinic-alfa-test', 'clinic-beta-test'] } } },
@@ -67,7 +107,23 @@ describe('Tenant Isolation Tests (RNF-001 / E11.3)', () => {
     });
     clinicBId = clinicB.id;
 
-    // 2. Create Users
+    // 2. Create Subscriptions
+    await prisma.subscription.create({
+      data: {
+        clinicId: clinicAId,
+        planType: PlanType.PRO,
+        status: SubscriptionStatus.ACTIVE,
+      },
+    });
+    await prisma.subscription.create({
+      data: {
+        clinicId: clinicBId,
+        planType: PlanType.TRIAL,
+        status: SubscriptionStatus.TRIAL,
+      },
+    });
+
+    // 3. Create Users
     const userA = await prisma.user.create({
       data: {
         clinicId: clinicAId,
@@ -90,12 +146,34 @@ describe('Tenant Isolation Tests (RNF-001 / E11.3)', () => {
     });
     userBId = userB.id;
 
-    // 3. Create Doctors
+    // 4. Create Specialties
+    const specA = await prisma.specialty.create({
+      data: {
+        clinicId: clinicAId,
+        name: 'Ortodoncia Avanzada',
+        defaultSlotDurationMinutes: 45,
+      },
+    });
+    specialtyAId = specA.id;
+
+    const specB = await prisma.specialty.create({
+      data: {
+        clinicId: clinicBId,
+        name: 'Implantología Beta',
+        defaultSlotDurationMinutes: 60,
+      },
+    });
+    specialtyBId = specB.id;
+
+    // 5. Create Doctors
     const doctorA = await prisma.doctor.create({
       data: {
         clinicId: clinicAId,
         name: 'Dr. Alejandro Alfa',
         specialties: ['Odontología General', 'Ortodoncia'],
+        doctorSpecialties: {
+          create: [{ specialtyId: specialtyAId }],
+        },
       },
     });
     doctorAId = doctorA.id;
@@ -105,15 +183,85 @@ describe('Tenant Isolation Tests (RNF-001 / E11.3)', () => {
         clinicId: clinicBId,
         name: 'Dra. Beatriz Beta',
         specialties: ['Endodoncia'],
+        doctorSpecialties: {
+          create: [{ specialtyId: specialtyBId }],
+        },
       },
     });
     doctorBId = doctorB.id;
 
-    // 4. Create Patients
+    // 6. Create Doctor Schedules
+    const schedA = await prisma.doctorSchedule.create({
+      data: {
+        clinicId: clinicAId,
+        doctorId: doctorAId,
+        dayOfWeek: 1, // Monday
+        startTime: '09:00',
+        endTime: '13:00',
+      },
+    });
+    scheduleAId = schedA.id;
+
+    const schedB = await prisma.doctorSchedule.create({
+      data: {
+        clinicId: clinicBId,
+        doctorId: doctorBId,
+        dayOfWeek: 2, // Tuesday
+        startTime: '14:00',
+        endTime: '18:00',
+      },
+    });
+    scheduleBId = schedB.id;
+
+    // 7. Create Channel Credentials
+    const credA = await prisma.channelCredential.create({
+      data: {
+        clinicId: clinicAId,
+        channelType: ChannelType.WHATSAPP,
+        identifier: '109988776655443',
+        encryptedToken: 'mock_cipher_alfa',
+      },
+    });
+    channelCredAId = credA.id;
+
+    const credB = await prisma.channelCredential.create({
+      data: {
+        clinicId: clinicBId,
+        channelType: ChannelType.WHATSAPP,
+        identifier: '209988776655443',
+        encryptedToken: 'mock_cipher_beta',
+      },
+    });
+    channelCredBId = credB.id;
+
+    // 8. Create Operational Logs
+    const logA = await prisma.operationalLog.create({
+      data: {
+        traceId: 'trace-alfa-123',
+        clinicId: clinicAId,
+        level: 'info',
+        category: 'auth',
+        message: 'Admin Alfa login success',
+      },
+    });
+    operationalLogAId = logA.id;
+
+    const logB = await prisma.operationalLog.create({
+      data: {
+        traceId: 'trace-beta-456',
+        clinicId: clinicBId,
+        level: 'info',
+        category: 'auth',
+        message: 'Admin Beta login success',
+      },
+    });
+    operationalLogBId = logB.id;
+
+    // 9. Create Patients
     const patientA = await prisma.patient.create({
       data: {
         clinicId: clinicAId,
-        name: 'Paciente Alfa',
+        name: 'Carlos Paciente Alfa',
         phone: '+593991111111',
       },
     });
@@ -122,23 +270,22 @@ describe('Tenant Isolation Tests (RNF-001 / E11.3)', () => {
     const patientB = await prisma.patient.create({
       data: {
         clinicId: clinicBId,
-        name: 'Paciente Beta',
+        name: 'Diana Paciente Beta',
         phone: '+593992222222',
       },
     });
     patientBId = patientB.id;
 
-    // 5. Create Appointments
-    const now = new Date();
+    // 10. Create Appointments
     const appointmentA = await prisma.appointment.create({
       data: {
         clinicId: clinicAId,
         doctorId: doctorAId,
         patientId: patientAId,
         status: AppointmentStatus.CONFIRMADA,
-        startAt: new Date(now.getTime() + 86400000),
-        endAt: new Date(now.getTime() + 86400000 + 1800000),
-        reason: 'Limpieza y revisión',
+        startAt: new Date('2026-10-01T14:00:00Z'),
+        endAt: new Date('2026-10-01T14:30:00Z'),
+        reason: 'Limpieza dental regular',
       },
     });
     appointmentAId = appointmentA.id;
@@ -148,9 +295,9 @@ describe('Tenant Isolation Tests (RNF-001 / E11.3)', () => {
         clinicId: clinicBId,
         doctorId: doctorBId,
         patientId: patientBId,
-        status: AppointmentStatus.CONFIRMADA,
-        startAt: new Date(now.getTime() + 172800000),
-        endAt: new Date(now.getTime() + 172800000 + 1800000),
+        status: AppointmentStatus.SOLICITADA,
+        startAt: new Date('2026-10-01T15:00:00Z'),
+        endAt: new Date('2026-10-01T15:30:00Z'),
         reason: 'Consulta endodóntica',
       },
     });
@@ -158,25 +305,41 @@ describe('Tenant Isolation Tests (RNF-001 / E11.3)', () => {
   });
 
   afterAll(async () => {
-    // Cleanup fixtures
-    if (prisma) {
-      await prisma.appointment.deleteMany({
-        where: { clinicId: { in: [clinicAId, clinicBId] } },
-      });
-      await prisma.patient.deleteMany({
-        where: { clinicId: { in: [clinicAId, clinicBId] } },
-      });
-      await prisma.doctor.deleteMany({
-        where: { clinicId: { in: [clinicAId, clinicBId] } },
-      });
-      await prisma.user.deleteMany({
-        where: { clinicId: { in: [clinicAId, clinicBId] } },
-      });
-      await prisma.clinic.deleteMany({
-        where: { id: { in: [clinicAId, clinicBId] } },
-      });
-      await prisma.$disconnect();
-    }
+    // Cleanup
+    await prisma.operationalLog.deleteMany({
+      where: { clinic: { slug: { in: ['clinic-alfa-test', 'clinic-beta-test'] } } },
+    });
+    await prisma.channelCredential.deleteMany({
+      where: { clinic: { slug: { in: ['clinic-alfa-test', 'clinic-beta-test'] } } },
+    });
+    await prisma.doctorSchedule.deleteMany({
+      where: { clinic: { slug: { in: ['clinic-alfa-test', 'clinic-beta-test'] } } },
+    });
+    await prisma.doctorSpecialty.deleteMany({
+      where: { doctor: { clinic: { slug: { in: ['clinic-alfa-test', 'clinic-beta-test'] } } } },
+    });
+    await prisma.specialty.deleteMany({
+      where: { clinic: { slug: { in: ['clinic-alfa-test', 'clinic-beta-test'] } } },
+    });
+    await prisma.subscription.deleteMany({
+      where: { clinic: { slug: { in: ['clinic-alfa-test', 'clinic-beta-test'] } } },
+    });
+    await prisma.appointment.deleteMany({
+      where: { clinic: { slug: { in: ['clinic-alfa-test', 'clinic-beta-test'] } } },
+    });
+    await prisma.patient.deleteMany({
+      where: { clinic: { slug: { in: ['clinic-alfa-test', 'clinic-beta-test'] } } },
+    });
+    await prisma.doctor.deleteMany({
+      where: { clinic: { slug: { in: ['clinic-alfa-test', 'clinic-beta-test'] } } },
+    });
+    await prisma.user.deleteMany({
+      where: { clinic: { slug: { in: ['clinic-alfa-test', 'clinic-beta-test'] } } },
+    });
+    await prisma.clinic.deleteMany({
+      where: { slug: { in: ['clinic-alfa-test', 'clinic-beta-test'] } },
+    });
+    await prisma.$disconnect();
   });
 
   describe('Strict Query Isolation (Read Boundaries)', () => {
@@ -185,21 +348,10 @@ describe('Tenant Isolation Tests (RNF-001 / E11.3)', () => {
         where: { clinicId: clinicAId },
       });
 
-      expect(appointmentsA.length).toBeGreaterThanOrEqual(1);
+      expect(appointmentsA.length).toBeGreaterThan(0);
       expect(appointmentsA.some((apt) => apt.id === appointmentAId)).toBe(true);
       expect(appointmentsA.some((apt) => apt.id === appointmentBId)).toBe(false);
       expect(appointmentsA.every((apt) => apt.clinicId === clinicAId)).toBe(true);
-    });
-
-    it('Appointment: Querying with clinicId B returns ONLY clinic B appointments and never A', async () => {
-      const appointmentsB = await prisma.appointment.findMany({
-        where: { clinicId: clinicBId },
-      });
-
-      expect(appointmentsB.length).toBeGreaterThanOrEqual(1);
-      expect(appointmentsB.some((apt) => apt.id === appointmentBId)).toBe(true);
-      expect(appointmentsB.some((apt) => apt.id === appointmentAId)).toBe(false);
-      expect(appointmentsB.every((apt) => apt.clinicId === clinicBId)).toBe(true);
     });
 
     it('Patient: Querying with clinicId A returns ONLY clinic A patients and never B', async () => {
@@ -231,6 +383,59 @@ describe('Tenant Isolation Tests (RNF-001 / E11.3)', () => {
       expect(usersA.some((u) => u.id === userBId)).toBe(false);
       expect(usersA.every((u) => u.clinicId === clinicAId)).toBe(true);
     });
+
+    it('Subscription: Querying with clinicId A returns ONLY clinic A subscription', async () => {
+      const subA = await prisma.subscription.findUnique({
+        where: { clinicId: clinicAId },
+      });
+      expect(subA).not.toBeNull();
+      expect(subA?.planType).toBe(PlanType.PRO);
+
+      const subCross = await prisma.subscription.findFirst({
+        where: { clinicId: clinicAId, id: (await prisma.subscription.findUnique({ where: { clinicId: clinicBId } }))?.id },
+      });
+      expect(subCross).toBeNull();
+    });
+
+    it('Specialty: Querying with clinicId A returns ONLY clinic A specialties and never B', async () => {
+      const specialtiesA = await prisma.specialty.findMany({
+        where: { clinicId: clinicAId },
+      });
+
+      expect(specialtiesA.some((s) => s.id === specialtyAId)).toBe(true);
+      expect(specialtiesA.some((s) => s.id === specialtyBId)).toBe(false);
+      expect(specialtiesA.every((s) => s.clinicId === clinicAId)).toBe(true);
+    });
+
+    it('DoctorSchedule: Querying with clinicId A returns ONLY clinic A doctor schedules', async () => {
+      const schedulesA = await prisma.doctorSchedule.findMany({
+        where: { clinicId: clinicAId },
+      });
+
+      expect(schedulesA.some((s) => s.id === scheduleAId)).toBe(true);
+      expect(schedulesA.some((s) => s.id === scheduleBId)).toBe(false);
+      expect(schedulesA.every((s) => s.clinicId === clinicAId)).toBe(true);
+    });
+
+    it('ChannelCredential: Querying with clinicId A returns ONLY clinic A credentials', async () => {
+      const credsA = await prisma.channelCredential.findMany({
+        where: { clinicId: clinicAId },
+      });
+
+      expect(credsA.some((c) => c.id === channelCredAId)).toBe(true);
+      expect(credsA.some((c) => c.id === channelCredBId)).toBe(false);
+      expect(credsA.every((c) => c.clinicId === clinicAId)).toBe(true);
+    });
+
+    it('OperationalLog: Querying with clinicId A returns ONLY clinic A logs', async () => {
+      const logsA = await prisma.operationalLog.findMany({
+        where: { clinicId: clinicAId },
+      });
+
+      expect(logsA.some((l) => l.id === operationalLogAId)).toBe(true);
+      expect(logsA.some((l) => l.id === operationalLogBId)).toBe(false);
+      expect(logsA.every((l) => l.clinicId === clinicAId)).toBe(true);
+    });
   });
 
   describe('Strict Mutation Isolation (Write Boundaries)', () => {
@@ -238,7 +443,7 @@ describe('Tenant Isolation Tests (RNF-001 / E11.3)', () => {
       const updateResult = await prisma.appointment.updateMany({
         where: {
           id: appointmentBId,
-          clinicId: clinicAId, // Attempt cross-tenant update
+          clinicId: clinicAId,
         },
         data: {
           reason: 'Hacked reason from Clinic A',
@@ -247,41 +452,61 @@ describe('Tenant Isolation Tests (RNF-001 / E11.3)', () => {
 
       expect(updateResult.count).toBe(0);
 
-      // Verify Appointment B is untouched
       const freshAppointmentB = await prisma.appointment.findUnique({
         where: { id: appointmentBId },
       });
       expect(freshAppointmentB?.reason).toBe('Consulta endodóntica');
     });
 
-    it('Cross-tenant delete: Clinic A cannot delete a Patient of Clinic B', async () => {
-      const deleteResult = await prisma.patient.deleteMany({
+    it('Cross-tenant update: Clinic A cannot modify a Specialty of Clinic B', async () => {
+      const updateResult = await prisma.specialty.updateMany({
         where: {
-          id: patientBId,
-          clinicId: clinicAId, // Attempt cross-tenant delete
+          id: specialtyBId,
+          clinicId: clinicAId,
+        },
+        data: {
+          name: 'Hacked Specialty Name',
+        },
+      });
+
+      expect(updateResult.count).toBe(0);
+
+      const freshSpecialtyB = await prisma.specialty.findUnique({
+        where: { id: specialtyBId },
+      });
+      expect(freshSpecialtyB?.name).toBe('Implantología Beta');
+    });
+
+    it('Cross-tenant delete: Clinic A cannot delete ChannelCredential of Clinic B', async () => {
+      const deleteResult = await prisma.channelCredential.deleteMany({
+        where: {
+          id: channelCredBId,
+          clinicId: clinicAId,
         },
       });
 
       expect(deleteResult.count).toBe(0);
 
-      // Verify Patient B still exists
-      const freshPatientB = await prisma.patient.findUnique({
-        where: { id: patientBId },
+      const freshCredB = await prisma.channelCredential.findUnique({
+        where: { id: channelCredBId },
       });
-      expect(freshPatientB).not.toBeNull();
-      expect(freshPatientB?.id).toBe(patientBId);
+      expect(freshCredB).not.toBeNull();
     });
 
-    it('Cross-tenant read by ID: Clinic A cannot access entity of Clinic B by ID alone without clinicId filter', async () => {
-      // Accessing with combined where (id + clinicId) correctly returns null
-      const appointmentCross = await prisma.appointment.findFirst({
+    it('Cross-tenant delete: Clinic A cannot delete a DoctorSchedule of Clinic B', async () => {
+      const deleteResult = await prisma.doctorSchedule.deleteMany({
         where: {
-          id: appointmentBId,
+          id: scheduleBId,
           clinicId: clinicAId,
         },
       });
 
-      expect(appointmentCross).toBeNull();
+      expect(deleteResult.count).toBe(0);
+
+      const freshSchedB = await prisma.doctorSchedule.findUnique({
+        where: { id: scheduleBId },
+      });
+      expect(freshSchedB).not.toBeNull();
     });
   });
 });

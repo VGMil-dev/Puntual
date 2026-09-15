@@ -2,6 +2,7 @@ import { Injectable, Logger } from '@nestjs/common';
 import * as crypto from 'crypto';
 import { RedisService } from '../../infrastructure/redis/redis.service';
 import { PrismaService } from '../../infrastructure/prisma/prisma.service';
+import { ChannelGatewayService } from '../channels/channel-gateway.service';
 import { NormalizedWebhookEvent, WebhookChannel } from './interfaces/normalized-event.interface';
 
 @Injectable()
@@ -14,6 +15,7 @@ export class WebhooksService {
   constructor(
     private readonly redisService: RedisService,
     private readonly prismaService: PrismaService,
+    private readonly channelGateway: ChannelGatewayService,
   ) {}
 
   /**
@@ -81,11 +83,8 @@ export class WebhooksService {
    */
   async resolveClinicByPhoneId(phoneNumberId: string): Promise<string | undefined> {
     if (!phoneNumberId) return undefined;
-    const clinic = await this.prismaService.clinic.findUnique({
-      where: { whatsappPhoneNumberId: phoneNumberId },
-      select: { id: true },
-    });
-    return clinic?.id;
+    const resolved = await this.channelGateway.resolveClinicByPhoneNumberId(phoneNumberId);
+    return resolved || undefined;
   }
 
   /**
@@ -93,6 +92,9 @@ export class WebhooksService {
    */
   async resolveClinicByTelegramToken(tokenHash: string): Promise<string | undefined> {
     if (!tokenHash) return undefined;
+    const resolved = await this.channelGateway.resolveClinicByTelegramIdentifier(tokenHash);
+    if (resolved) return resolved;
+
     const clinic = await this.prismaService.clinic.findFirst({
       where: { telegramBotTokenHash: tokenHash },
       select: { id: true },

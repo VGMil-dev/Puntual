@@ -40,6 +40,35 @@ export class RedisService implements OnModuleInit, OnModuleDestroy {
     return this.client;
   }
 
+  async get(key: string): Promise<string | null> {
+    try {
+      return await this.client.get(key);
+    } catch (error) {
+      this.logger.error(`Redis get failed for key ${key}`, error);
+      return null;
+    }
+  }
+
+  async set(key: string, value: string, ttlSeconds?: number): Promise<void> {
+    try {
+      if (ttlSeconds) {
+        await this.client.set(key, value, 'EX', ttlSeconds);
+      } else {
+        await this.client.set(key, value);
+      }
+    } catch (error) {
+      this.logger.error(`Redis set failed for key ${key}`, error);
+    }
+  }
+
+  async del(key: string): Promise<void> {
+    try {
+      await this.client.del(key);
+    } catch (error) {
+      this.logger.error(`Redis del failed for key ${key}`, error);
+    }
+  }
+
   async isHealthy(): Promise<boolean> {
     try {
       const response = await this.client.ping();

@@ -13,6 +13,11 @@
 | **`Doctor`** | `doctors` | `clinicId` | No (estricto) | `onDelete: Cascade` con `Clinic` | Obligatoria |
 | **`Patient`** | `patients` | `clinicId` | No (estricto, clave única compuesta `[clinicId, phone]`) | `onDelete: Cascade` con `Clinic` | Obligatoria |
 | **`Appointment`** | `appointments` | `clinicId` | No (estricto, indexado junto a `status` y `startAt`) | `onDelete: Cascade` con `Clinic` | Obligatoria (consultas de agenda, estados y holds) |
+| **`Subscription`** | `subscriptions` | `clinicId` | No (estricto, unique) | `onDelete: Cascade` con `Clinic` | Obligatoria (suscripción y plan) |
+| **`Specialty`** | `specialties` | `clinicId` | No (estricto, indexado junto a `name`) | `onDelete: Cascade` con `Clinic` | Obligatoria (catálogo de especialidades) |
+| **`DoctorSchedule`** | `doctor_schedules` | `clinicId` | No (estricto, indexado junto a `doctorId`) | `onDelete: Cascade` con `Clinic` | Obligatoria (horarios de atención) |
+| **`ChannelCredential`** | `channel_credentials` | `clinicId` | No (estricto, indexado junto a `channelType`) | `onDelete: Cascade` con `Clinic` | Obligatoria (credenciales de canales) |
+| **`OperationalLog`** | `operational_logs` | `clinicId` | Sí (solo nulo en logs a nivel plataforma; obligatorio en flujos tenant) | `onDelete: SetNull` con `Clinic` | Obligatoria (trazabilidad y métricas) |
 
 ## Regla de evolución
 Cada vez que se introduzca un nuevo modelo en `schema.prisma` durante fases posteriores (ej. `Conversation`, `ScheduledJob`, `SurveyResponse`), este documento debe actualizarse y los tests de E11.3 deben extenderse para mantener el 100% de cobertura de aislamiento.
