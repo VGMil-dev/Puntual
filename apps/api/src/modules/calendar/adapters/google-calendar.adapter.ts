@@ -139,9 +139,12 @@ export class GoogleCalendarAdapter implements CalendarPort {
       }
       return credentials.access_token;
     } catch (err: any) {
-      this.logger.warn(`Simulated or actual refresh flow: ${err.message}`, 'GoogleCalendarAdapter');
-      // In mocked or offline environments return refreshed token signature
-      return `refreshed_token_for_${refreshToken.slice(0, 10)}`;
+      this.logger.error(
+        `Google Calendar token refresh failed: ${err.message}`,
+        err.stack,
+        'GoogleCalendarAdapter',
+      );
+      throw err;
     }
   }
 }

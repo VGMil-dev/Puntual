@@ -223,6 +223,7 @@ export class AuthService {
     const resetHash = this.hashToken(dto.token);
 
     const user = await this.prisma.user.findFirst({
+      // bypass-tenant-check: password reset token hash is globally unique and unauthenticated
       where: {
         passwordResetTokenHash: resetHash,
         passwordResetExpiresAt: { gt: new Date() },
@@ -307,8 +308,8 @@ export class AuthService {
     await this.emailPort.sendEmail({
       to: user.email,
       subject: 'Invitación como Administrador de Clínica - Puntual',
-      html: `<p>Hola ${user.name},</p><p>Has sido registrado como Administrador de Clínica en Puntual.</p><p>Tus credenciales de acceso son:</p><ul><li>Email: ${user.email}</li><li>Contraseña: ${plainPassword}</li></ul><p>Inicia sesión aquí: <a href="${loginUrl}">${loginUrl}</a></p>`,
-      text: `Hola ${user.name},\n\nHas sido registrado como Administrador de Clínica en Puntual.\nEmail: ${user.email}\nContraseña: ${plainPassword}\nInicia sesión en: ${loginUrl}`,
+      html: `<p>Hola ${user.name},</p><p>Has sido registrado como Administrador de Clínica en Puntual.</p><p>Para ingresar al sistema y gestionar tu clínica, inicia sesión en: <a href="${loginUrl}">${loginUrl}</a></p>`,
+      text: `Hola ${user.name},\n\nHas sido registrado como Administrador de Clínica en Puntual.\nPara ingresar al sistema y gestionar tu clínica, inicia sesión en: ${loginUrl}`,
     });
 
     return {

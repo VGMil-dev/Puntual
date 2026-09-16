@@ -5,9 +5,10 @@ import { AI_PORT } from './ports/ai.port';
 import { ClassifyPatientMessageUseCase } from './use-cases/classify-patient-message.use-case';
 import { DoctorsModule } from '../doctors/doctors.module';
 import { InfisicalModule } from '../../integrations/secrets/infisical/infisical.module';
+import { AuthModule } from '../auth/auth.module';
 
 @Module({
-  imports: [DoctorsModule, InfisicalModule],
+  imports: [AuthModule, DoctorsModule, InfisicalModule],
   controllers: [AiController],
   providers: [
     VercelAiAdapter,

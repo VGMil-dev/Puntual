@@ -13,10 +13,17 @@ export interface JwtPayload {
 @Injectable()
 export class JwtStrategy extends PassportStrategy(Strategy) {
   constructor(private readonly prisma: PrismaService) {
+    const jwtSecret = process.env.JWT_SECRET;
+    if (!jwtSecret || jwtSecret.length < 32) {
+      throw new Error(
+        'JWT_SECRET environment variable is required and must be at least 32 characters long (RNF-012)',
+      );
+    }
+
     super({
       jwtFromRequest: ExtractJwt.fromAuthHeaderAsBearerToken(),
       ignoreExpiration: false,
-      secretOrKey: process.env.JWT_SECRET || 'puntual-sprint2-jwt-super-secret-key-change-in-prod',
+      secretOrKey: jwtSecret,
     });
   }
 

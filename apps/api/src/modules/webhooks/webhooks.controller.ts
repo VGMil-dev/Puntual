@@ -32,7 +32,11 @@ export class WebhooksController {
     @Query('hub.challenge') challenge: string,
     @Res() res: Response,
   ) {
-    const expectedToken = process.env.META_VERIFY_TOKEN || 'test_meta_verify_token';
+    const expectedToken = process.env.META_VERIFY_TOKEN;
+    if (!expectedToken) {
+      this.logger.error('META_VERIFY_TOKEN is not configured in environment');
+      return res.status(HttpStatus.FORBIDDEN).send('Forbidden');
+    }
 
     if (mode === 'subscribe' && token === expectedToken) {
       this.logger.log('Meta webhook challenge verified successfully');
@@ -73,7 +77,7 @@ export class WebhooksController {
       const signatureHeader = req.headers['x-hub-signature-256'] as string;
       const phoneNumberId = req.body?.entry?.[0]?.changes?.[0]?.value?.metadata?.phone_number_id;
 
-      let appSecret = process.env.META_APP_SECRET || 'test_meta_app_secret';
+      let appSecret = process.env.META_APP_SECRET;
 
       if (phoneNumberId) {
         const clinicSecretInfo = await this.webhooksService.resolveClinicSecret('meta', phoneNumberId);
@@ -85,6 +89,22 @@ export class WebhooksController {
         } else {
           clinicId = await this.webhooksService.resolveClinicByPhoneId(phoneNumberId);
         }
+      }
+
+      if (!appSecret) {
+        this.logger.warn(
+          JSON.stringify({
+            action: 'webhook_rejected',
+            channel: 'meta',
+            reason: 'missing_app_secret',
+            traceId,
+            clinicId,
+          }),
+        );
+        return res.status(HttpStatus.UNAUTHORIZED).json({
+          error: 'Webhook signing secret not configured',
+          traceId,
+        });
       }
 
       const isValid = this.webhooksService.verifyMetaSignature(rawBody, signatureHeader, appSecret);
@@ -107,7 +127,7 @@ export class WebhooksController {
     } else if (typedChannel === 'telegram') {
       const secretTokenHeader = req.headers['x-telegram-bot-api-secret-token'] as string;
       const tokenHash = req.headers['x-telegram-bot-token-hash'] as string;
-      let expectedToken = process.env.TELEGRAM_SECRET_TOKEN || 'test_telegram_secret_token';
+      let expectedToken = process.env.TELEGRAM_SECRET_TOKEN;
 
       if (tokenHash) {
         const clinicSecretInfo = await this.webhooksService.resolveClinicSecret('telegram', tokenHash);
@@ -119,6 +139,22 @@ export class WebhooksController {
         } else {
           clinicId = await this.webhooksService.resolveClinicByTelegramToken(tokenHash);
         }
+      }
+
+      if (!expectedToken) {
+        this.logger.warn(
+          JSON.stringify({
+            action: 'webhook_rejected',
+            channel: 'telegram',
+            reason: 'missing_secret_token',
+            traceId,
+            clinicId,
+          }),
+        );
+        return res.status(HttpStatus.FORBIDDEN).json({
+          error: 'Webhook secret token not configured',
+          traceId,
+        });
       }
 
       const isValid = this.webhooksService.verifyTelegramSecretToken(secretTokenHeader, expectedToken);

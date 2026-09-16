@@ -226,17 +226,35 @@ describe('Channels, Calendar, Doctors & AI E2E (E1.3, E1.4, E1.5, E11.4, E2.1)',
       expect(schedRes.body.doctorId).toBe(docRes.body.id);
     });
 
-    it('Simulates token expiration and validates automatic token refresh on CalendarPort (E1.4)', async () => {
+    it('Validates token refresh on CalendarPort and propagates explicit error on failure (E1.4 / fail-fast)', async () => {
       const calendarPort = app.get<CalendarPort>(CALENDAR_PORT);
       const channelsService = app.get(ChannelsService);
 
       const fakeRefreshToken = 'mock_google_refresh_token_xyz_12345';
       const cipher = channelsService.encryptToken(fakeRefreshToken);
 
-      // Verify refreshAccessToken runs without error
+      // Test successful refresh via mocked OAuth client
+      const oauthMock = {
+        setCredentials: jest.fn(),
+        refreshAccessToken: jest.fn().mockResolvedValue({
+          credentials: { access_token: 'mock_refreshed_access_token_success' },
+        }),
+      };
+      const spy = jest.spyOn(calendarPort as any, 'getOAuthClient').mockReturnValue(oauthMock as any);
+
       const refreshedToken = await calendarPort.refreshAccessToken!(cipher);
-      expect(refreshedToken).toBeDefined();
-      expect(typeof refreshedToken).toBe('string');
+      expect(refreshedToken).toBe('mock_refreshed_access_token_success');
+      spy.mockRestore();
+
+      // Test explicit failure propagation (fail-fast: no fake simulated success)
+      const failMock = {
+        setCredentials: jest.fn(),
+        refreshAccessToken: jest.fn().mockRejectedValue(new Error('Invalid Google OAuth refresh grant')),
+      };
+      const failSpy = jest.spyOn(calendarPort as any, 'getOAuthClient').mockReturnValue(failMock as any);
+
+      await expect(calendarPort.refreshAccessToken!(cipher)).rejects.toThrow('Invalid Google OAuth refresh grant');
+      failSpy.mockRestore();
     });
   });
 
@@ -270,9 +288,32 @@ describe('Channels, Calendar, Doctors & AI E2E (E1.3, E1.4, E1.5, E11.4, E2.1)',
   });
 
   describe('E2.1: Intent, Closed Motivo & Specialty Recommendation', () => {
+    it('Rejects unauthenticated request with 401 Unauthorized', async () => {
+      await request(app.getHttpServer())
+        .post('/ai/classify-message')
+        .send({
+          clinicId,
+          message: 'Hola, quisiera agendar una cita.',
+        })
+        .expect(401);
+    });
+
+    it('Rejects cross-tenant access with 403 Forbidden', async () => {
+      const otherClinicId = '00000000-0000-4000-8000-000000000000';
+      await request(app.getHttpServer())
+        .post('/ai/classify-message')
+        .set('Authorization', `Bearer ${clinicAdminToken}`)
+        .send({
+          clinicId: otherClinicId,
+          message: 'Hola, quisiera agendar una cita.',
+        })
+        .expect(403);
+    });
+
     it('Classifies appointment request, extracts closed reason ORTODONCIA, and recommends Dr. Ortiz', async () => {
       const res = await request(app.getHttpServer())
         .post('/ai/classify-message')
+        .set('Authorization', `Bearer ${clinicAdminToken}`)
         .send({
           clinicId,
           message: 'Hola, buenas tardes, quisiera agendar una cita para colocarme brackets u ortodoncia por favor.',
@@ -290,6 +331,7 @@ describe('Channels, Calendar, Doctors & AI E2E (E1.3, E1.4, E1.5, E11.4, E2.1)',
     it('Ambiguous message flags clarificationNeeded with orienting question', async () => {
       const res = await request(app.getHttpServer())
         .post('/ai/classify-message')
+        .set('Authorization', `Bearer ${clinicAdminToken}`)
         .send({
           clinicId,
           message: 'Hola, tengo una duda.',
