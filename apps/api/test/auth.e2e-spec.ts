@@ -21,6 +21,7 @@ describe('Auth & Clinic Onboarding E2E (E1.1 / E1.2 / DoD §10)', () => {
 
   let clinicAlfaAdminEmail = 'admin.alfa.e2e@puntual.test';
   let clinicBetaAdminEmail = 'admin.beta.e2e@puntual.test';
+  let clinicGammaAdminEmail = 'admin.gamma.e2e@puntual.test';
   let adminPassword = 'Password123!';
 
   beforeAll(async () => {
@@ -44,13 +45,13 @@ describe('Auth & Clinic Onboarding E2E (E1.1 / E1.2 / DoD §10)', () => {
 
     // Cleanup existing fixtures
     await prisma.refreshToken.deleteMany({
-      where: { user: { email: { in: [clinicAlfaAdminEmail, clinicBetaAdminEmail, 'superadmin.e2e@puntual.test'] } } },
+      where: { user: { email: { in: [clinicAlfaAdminEmail, clinicBetaAdminEmail, clinicGammaAdminEmail, 'superadmin.e2e@puntual.test'] } } },
     });
     await prisma.user.deleteMany({
-      where: { email: { in: [clinicAlfaAdminEmail, clinicBetaAdminEmail, 'superadmin.e2e@puntual.test'] } },
+      where: { email: { in: [clinicAlfaAdminEmail, clinicBetaAdminEmail, clinicGammaAdminEmail, 'superadmin.e2e@puntual.test'] } },
     });
     await prisma.clinic.deleteMany({
-      where: { slug: { in: ['clinic-alfa-e2e', 'clinic-beta-e2e'] } },
+      where: { slug: { in: ['clinic-alfa-e2e', 'clinic-beta-e2e', 'clinic-gamma-e2e'] } },
     });
 
     // Create Super Admin fixture
@@ -78,13 +79,13 @@ describe('Auth & Clinic Onboarding E2E (E1.1 / E1.2 / DoD §10)', () => {
 
   afterAll(async () => {
     await prisma.refreshToken.deleteMany({
-      where: { user: { email: { in: [clinicAlfaAdminEmail, clinicBetaAdminEmail, 'superadmin.e2e@puntual.test'] } } },
+      where: { user: { email: { in: [clinicAlfaAdminEmail, clinicBetaAdminEmail, clinicGammaAdminEmail, 'superadmin.e2e@puntual.test'] } } },
     });
     await prisma.user.deleteMany({
-      where: { email: { in: [clinicAlfaAdminEmail, clinicBetaAdminEmail, 'superadmin.e2e@puntual.test'] } },
+      where: { email: { in: [clinicAlfaAdminEmail, clinicBetaAdminEmail, clinicGammaAdminEmail, 'superadmin.e2e@puntual.test'] } },
     });
     await prisma.clinic.deleteMany({
-      where: { slug: { in: ['clinic-alfa-e2e', 'clinic-beta-e2e'] } },
+      where: { slug: { in: ['clinic-alfa-e2e', 'clinic-beta-e2e', 'clinic-gamma-e2e'] } },
     });
     await app.close();
   });
@@ -126,12 +127,15 @@ describe('Auth & Clinic Onboarding E2E (E1.1 / E1.2 / DoD §10)', () => {
 
       clinicAlfaId = res.body.clinic.id;
 
-      // Verify invitation email was dispatched (RF-026)
+      // Verify invitation email was dispatched without plaintext password (RF-026, RNF-004)
       const sent = emailAdapter.getSentEmails();
       const invite = sent.find((e) => e.to === clinicAlfaAdminEmail);
       expect(invite).toBeDefined();
       expect(invite?.subject).toContain('Invitación');
-      expect(invite?.html).toContain('login');
+      expect(invite?.html).not.toMatch(/Contraseña:/i);
+      expect(invite?.text).not.toMatch(/Contraseña:/i);
+      expect(invite?.html).toContain('reset-password?token=');
+      expect(invite?.text).toContain('reset-password?token=');
     });
 
     it('Super Admin creates Clinic Beta with plan PRO', async () => {
@@ -151,6 +155,79 @@ describe('Auth & Clinic Onboarding E2E (E1.1 / E1.2 / DoD §10)', () => {
       expect(res.body.clinic.subscriptionStatus).toBe(SubscriptionStatus.ACTIVE);
       expect(res.body.subscription.planType).toBe(PlanType.PRO);
       clinicBetaId = res.body.clinic.id;
+    });
+
+    it('Onboarding Clinic Admin without password sends secure link and allows setting password only once (RF-026, RNF-004)', async () => {
+      const res = await request(app.getHttpServer())
+        .post('/clinics')
+        .set('Authorization', `Bearer ${superAdminToken}`)
+        .send({
+          name: 'Clínica Gamma E2E',
+          slug: 'clinic-gamma-e2e',
+          planType: PlanType.TRIAL,
+          trialDays: 14,
+          adminName: 'Admin Gamma',
+          adminEmail: clinicGammaAdminEmail,
+          // adminPassword omitted intentionally
+        })
+        .expect(201);
+
+      const clinicGammaId = res.body.clinic.id;
+
+      // (a) Verify invitation email never contains plaintext password
+      const sent = emailAdapter.getSentEmails();
+      const invite = sent.find((e) => e.to === clinicGammaAdminEmail);
+      expect(invite).toBeDefined();
+      expect(invite?.subject).toContain('Invitación');
+      expect(invite?.html).not.toMatch(/Contraseña:/i);
+      expect(invite?.text).not.toMatch(/Contraseña:/i);
+      expect(invite?.html).toContain('reset-password?token=');
+      expect(invite?.html).toContain('72 horas');
+
+      // Extract invitation token from the email link
+      const tokenMatch = invite?.html.match(/token=([a-f0-9]+)/);
+      expect(tokenMatch).not.toBeNull();
+      const inviteToken = tokenMatch![1];
+
+      // Login fails before setting password
+      await request(app.getHttpServer())
+        .post('/auth/login')
+        .send({
+          email: clinicGammaAdminEmail,
+          password: 'AttemptPassword123!',
+        })
+        .expect(401);
+
+      // (b) Set password using the one-time invitation token
+      const newGammaPassword = 'GammaSecurePassword2026!';
+      await request(app.getHttpServer())
+        .post('/auth/reset-password')
+        .send({
+          token: inviteToken,
+          newPassword: newGammaPassword,
+        })
+        .expect(200);
+
+      // Login now succeeds with newly established password
+      const loginRes = await request(app.getHttpServer())
+        .post('/auth/login')
+        .send({
+          email: clinicGammaAdminEmail,
+          password: newGammaPassword,
+        })
+        .expect(200);
+      expect(loginRes.body.accessToken).toBeDefined();
+      expect(loginRes.body.user.role).toBe(UserRole.CLINIC_ADMIN);
+      expect(loginRes.body.user.clinicId).toBe(clinicGammaId);
+
+      // Token is single-use: repeating reset-password with the same token fails
+      await request(app.getHttpServer())
+        .post('/auth/reset-password')
+        .send({
+          token: inviteToken,
+          newPassword: 'AnotherPassword123!',
+        })
+        .expect(400);
     });
   });
 

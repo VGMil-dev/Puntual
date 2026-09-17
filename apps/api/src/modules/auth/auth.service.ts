@@ -274,8 +274,12 @@ export class AuthService {
       throw new BadRequestException(`A user with email ${dto.email} already exists`);
     }
 
-    const plainPassword = dto.password || crypto.randomBytes(8).toString('hex') + 'Aa1!';
+    const plainPassword = dto.password || crypto.randomBytes(32).toString('hex') + 'Aa1!';
     const passwordHash = await bcrypt.hash(plainPassword, this.saltRounds);
+
+    const inviteToken = crypto.randomBytes(32).toString('hex');
+    const inviteHash = this.hashToken(inviteToken);
+    const inviteExpiresAt = new Date(Date.now() + 72 * 3600 * 1000); // 72 hours (RF-026, RNF-004)
 
     const user = await client.user.create({
       data: {
@@ -284,6 +288,8 @@ export class AuthService {
         name: dto.name,
         passwordHash,
         role: UserRole.CLINIC_ADMIN,
+        passwordResetTokenHash: inviteHash,
+        passwordResetExpiresAt: inviteExpiresAt,
       },
       select: {
         id: true,
@@ -300,21 +306,22 @@ export class AuthService {
       clinicId: dto.clinicId,
     });
 
-    // Dispatch invitation email via EmailPort (RF-026)
-    const loginUrl = process.env.APP_URL
-      ? `${process.env.APP_URL}/login`
-      : 'https://app.puntual.ec/login';
+    // Dispatch invitation email via EmailPort (RF-026, RNF-004)
+    const setupUrl = process.env.APP_URL
+      ? `${process.env.APP_URL}/reset-password?token=${inviteToken}`
+      : `https://app.puntual.ec/reset-password?token=${inviteToken}`;
 
     await this.emailPort.sendEmail({
       to: user.email,
       subject: 'Invitación como Administrador de Clínica - Puntual',
-      html: `<p>Hola ${user.name},</p><p>Has sido registrado como Administrador de Clínica en Puntual.</p><p>Para ingresar al sistema y gestionar tu clínica, inicia sesión en: <a href="${loginUrl}">${loginUrl}</a></p>`,
-      text: `Hola ${user.name},\n\nHas sido registrado como Administrador de Clínica en Puntual.\nPara ingresar al sistema y gestionar tu clínica, inicia sesión en: ${loginUrl}`,
+      html: `<p>Hola ${user.name},</p><p>Has sido registrado como Administrador de Clínica en Puntual.</p><p>Para configurar tu contraseña e ingresar al sistema, haz clic en el siguiente enlace:</p><p><a href="${setupUrl}">${setupUrl}</a></p><p>Este enlace expirará en 72 horas.</p>`,
+      text: `Hola ${user.name},\n\nHas sido registrado como Administrador de Clínica en Puntual.\nPara configurar tu contraseña e ingresar al sistema, accede a: ${setupUrl}\n\nEste enlace expira en 72 horas.`,
     });
 
     return {
       user,
-      initialPassword: dto.password ? undefined : plainPassword,
+      inviteToken: process.env.NODE_ENV !== 'production' ? inviteToken : undefined,
+      initialPassword: undefined,
     };
   }
 }
