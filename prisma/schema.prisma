@@ -253,6 +253,7 @@ model Appointment {
   clinicId              String
   doctorId              String
   patientId             String
+  conversationId        String?
   status                AppointmentStatus @default(SOLICITADA)
   startAt               DateTime
   endAt                 DateTime
@@ -273,6 +274,7 @@ model Appointment {
   @@index([clinicId, status])
   @@index([clinicId, startAt])
   @@index([doctorId, startAt])
+  @@index([clinicId, conversationId])
   @@map("appointments")
 }
 

@@ -8,6 +8,7 @@
     "build:api": "pnpm --filter @puntual/api build",
     "test": "pnpm --filter @puntual/api test",
     "test:isolation": "pnpm --filter @puntual/api exec jest --config ./test/jest-e2e.json ./test/tenant-isolation.e2e-spec.ts --runInBand",
+    "test:concurrency": "pnpm --filter @puntual/api test:concurrency",
     "test:e2e": "pnpm --filter @puntual/api test:e2e",
     "lint:tenant": "node scripts/check-tenant-boundary.js",
     "prisma:generate": "prisma generate",

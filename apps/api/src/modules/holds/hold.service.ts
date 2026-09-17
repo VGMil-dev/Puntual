@@ -78,7 +78,7 @@ export interface AcquireHoldParams {
 
 export interface AcquireHoldResult {
   success: boolean;
-  reason?: 'MAX_HOLDS_EXCEEDED' | 'SLOT_ALREADY_LOCKED' | string;
+  reason?: 'OK' | 'MAX_HOLDS_EXCEEDED' | 'SLOT_ALREADY_LOCKED' | string;
   slotKey: string;
   counterKey: string;
   expiresAt: Date;
@@ -258,6 +258,7 @@ export class HoldService implements OnApplicationBootstrap {
 
       return {
         success: true,
+        reason: 'OK',
         slotKey,
         counterKey,
         expiresAt,

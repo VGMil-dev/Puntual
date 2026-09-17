@@ -72,6 +72,9 @@ jobs:
       - name: Build Application
         run: pnpm build:api
 
+      - name: Run Concurrency Hold Tests (RF-025, RNF-011, DoD §10)
+        run: pnpm test:concurrency
+
       - name: Run E2E Test Suite (Health, Webhooks, Tenant Isolation)
         run: pnpm test:e2e
 
