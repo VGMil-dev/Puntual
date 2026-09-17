@@ -5,6 +5,8 @@ import {
   SubscriptionStatus,
   PlanType,
   ChannelType,
+  ConversationStatus,
+  JobStatus,
 } from '@prisma/client';
 import dotenv from 'dotenv';
 
@@ -40,6 +42,12 @@ describe('Tenant Isolation Tests (RNF-001 / E11.3 — Extended for Sprint 2)', (
   let appointmentAId: string;
   let appointmentBId: string;
 
+  let conversationAId: string;
+  let conversationBId: string;
+
+  let scheduledJobAId: string;
+  let scheduledJobBId: string;
+
   beforeAll(async () => {
     prisma = new PrismaClient({
       datasources: {
@@ -51,6 +59,12 @@ describe('Tenant Isolation Tests (RNF-001 / E11.3 — Extended for Sprint 2)', (
     await prisma.$connect();
 
     // Clean up any test fixtures from previous runs
+    await prisma.scheduledJob.deleteMany({
+      where: { clinic: { slug: { in: ['clinic-alfa-test', 'clinic-beta-test'] } } },
+    });
+    await prisma.conversation.deleteMany({
+      where: { clinic: { slug: { in: ['clinic-alfa-test', 'clinic-beta-test'] } } },
+    });
     await prisma.operationalLog.deleteMany({
       where: { clinic: { slug: { in: ['clinic-alfa-test', 'clinic-beta-test'] } } },
     });
@@ -302,10 +316,66 @@ describe('Tenant Isolation Tests (RNF-001 / E11.3 — Extended for Sprint 2)', (
       },
     });
     appointmentBId = appointmentB.id;
+
+    // 11. Create Conversations
+    const convA = await prisma.conversation.create({
+      data: {
+        clinicId: clinicAId,
+        patientId: patientAId,
+        channelType: ChannelType.WHATSAPP,
+        channelThreadId: 'thread-alfa-1',
+        status: ConversationStatus.ACTIVA,
+      },
+    });
+    conversationAId = convA.id;
+
+    const convB = await prisma.conversation.create({
+      data: {
+        clinicId: clinicBId,
+        patientId: patientBId,
+        channelType: ChannelType.WHATSAPP,
+        channelThreadId: 'thread-beta-1',
+        status: ConversationStatus.ACTIVA,
+      },
+    });
+    conversationBId = convB.id;
+
+    // 12. Create Scheduled Jobs
+    const jobA = await prisma.scheduledJob.create({
+      data: {
+        clinicId: clinicAId,
+        type: 'expiracion_hold',
+        entityId: appointmentAId,
+        executionDate: '2026-10-01',
+        status: JobStatus.COMPLETED,
+        idempotencyKey: `expiracion_hold:${clinicAId}:${appointmentAId}:2026-10-01`,
+        attempts: 1,
+      },
+    });
+    scheduledJobAId = jobA.id;
+
+    const jobB = await prisma.scheduledJob.create({
+      data: {
+        clinicId: clinicBId,
+        type: 'expiracion_hold',
+        entityId: appointmentBId,
+        executionDate: '2026-10-01',
+        status: JobStatus.COMPLETED,
+        idempotencyKey: `expiracion_hold:${clinicBId}:${appointmentBId}:2026-10-01`,
+        attempts: 1,
+      },
+    });
+    scheduledJobBId = jobB.id;
   });
 
   afterAll(async () => {
     // Cleanup
+    await prisma.scheduledJob.deleteMany({
+      where: { clinic: { slug: { in: ['clinic-alfa-test', 'clinic-beta-test'] } } },
+    });
+    await prisma.conversation.deleteMany({
+      where: { clinic: { slug: { in: ['clinic-alfa-test', 'clinic-beta-test'] } } },
+    });
     await prisma.operationalLog.deleteMany({
       where: { clinic: { slug: { in: ['clinic-alfa-test', 'clinic-beta-test'] } } },
     });
@@ -436,6 +506,26 @@ describe('Tenant Isolation Tests (RNF-001 / E11.3 — Extended for Sprint 2)', (
       expect(logsA.some((l) => l.id === operationalLogBId)).toBe(false);
       expect(logsA.every((l) => l.clinicId === clinicAId)).toBe(true);
     });
+
+    it('Conversation: Querying with clinicId A returns ONLY clinic A conversations and never B', async () => {
+      const convsA = await prisma.conversation.findMany({
+        where: { clinicId: clinicAId },
+      });
+
+      expect(convsA.some((c) => c.id === conversationAId)).toBe(true);
+      expect(convsA.some((c) => c.id === conversationBId)).toBe(false);
+      expect(convsA.every((c) => c.clinicId === clinicAId)).toBe(true);
+    });
+
+    it('ScheduledJob: Querying with clinicId A returns ONLY clinic A scheduled jobs and never B', async () => {
+      const jobsA = await prisma.scheduledJob.findMany({
+        where: { clinicId: clinicAId },
+      });
+
+      expect(jobsA.some((j) => j.id === scheduledJobAId)).toBe(true);
+      expect(jobsA.some((j) => j.id === scheduledJobBId)).toBe(false);
+      expect(jobsA.every((j) => j.clinicId === clinicAId)).toBe(true);
+    });
   });
 
   describe('Strict Mutation Isolation (Write Boundaries)', () => {
@@ -508,5 +598,41 @@ describe('Tenant Isolation Tests (RNF-001 / E11.3 — Extended for Sprint 2)', (
       });
       expect(freshSchedB).not.toBeNull();
     });
+
+    it('Cross-tenant update: Clinic A cannot modify a Conversation of Clinic B', async () => {
+      const updateResult = await prisma.conversation.updateMany({
+        where: {
+          id: conversationBId,
+          clinicId: clinicAId,
+        },
+        data: {
+          status: ConversationStatus.CERRADA,
+        },
+      });
+
+      expect(updateResult.count).toBe(0);
+
+      const freshConvB = await prisma.conversation.findUnique({
+        where: { id: conversationBId },
+      });
+      expect(freshConvB?.status).toBe(ConversationStatus.ACTIVA);
+    });
+
+    it('Cross-tenant delete: Clinic A cannot delete a ScheduledJob of Clinic B', async () => {
+      const deleteResult = await prisma.scheduledJob.deleteMany({
+        where: {
+          id: scheduledJobBId,
+          clinicId: clinicAId,
+        },
+      });
+
+      expect(deleteResult.count).toBe(0);
+
+      const freshJobB = await prisma.scheduledJob.findUnique({
+        where: { id: scheduledJobBId },
+      });
+      expect(freshJobB).not.toBeNull();
+    });
   });
 });
+

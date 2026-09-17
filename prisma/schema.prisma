@@ -64,6 +64,8 @@ model Clinic {
   doctorSchedules            DoctorSchedule[]
   channelCredentials        ChannelCredential[]
   operationalLogs            OperationalLog[]
+  conversations              Conversation[]
+  scheduledJobs              ScheduledJob[]
 
   @@map("clinics")
 }
@@ -239,6 +241,7 @@ model Patient {
 
   clinic         Clinic        @relation(fields: [clinicId], references: [id], onDelete: Cascade)
   appointments   Appointment[]
+  conversations  Conversation[]
 
   @@unique([clinicId, phone])
   @@index([clinicId])
@@ -271,4 +274,58 @@ model Appointment {
   @@index([clinicId, startAt])
   @@index([doctorId, startAt])
   @@map("appointments")
+}
+
+enum ConversationStatus {
+  ACTIVA
+  ESCALADA
+  RESUELTA
+  CERRADA
+}
+
+model Conversation {
+  id              String             @id @default(uuid())
+  clinicId        String
+  patientId       String?
+  channelType     ChannelType
+  channelThreadId String
+  status          ConversationStatus @default(ACTIVA)
+  lastActivityAt  DateTime           @default(now())
+  createdAt       DateTime           @default(now())
+  updatedAt       DateTime           @updatedAt
+
+  clinic          Clinic             @relation(fields: [clinicId], references: [id], onDelete: Cascade)
+  patient         Patient?           @relation(fields: [patientId], references: [id], onDelete: SetNull)
+
+  @@unique([clinicId, channelType, channelThreadId])
+  @@index([clinicId, status])
+  @@map("conversations")
+}
+
+enum JobStatus {
+  PENDING
+  PROCESSING
+  COMPLETED
+  FAILED
+}
+
+model ScheduledJob {
+  id             String    @id @default(uuid())
+  clinicId       String
+  type           String    // "expiracion_hold", "calendar_sync", "reconfirmacion", etc.
+  entityId       String    // e.g. appointmentId
+  executionDate  String    // YYYY-MM-DD
+  status         JobStatus @default(PENDING)
+  idempotencyKey String    @unique // tipo:clinicaId:entidadId:fechaEjecucion
+  attempts       Int       @default(0)
+  payload        Json?
+  lastError      String?
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+
+  clinic         Clinic    @relation(fields: [clinicId], references: [id], onDelete: Cascade)
+
+  @@index([clinicId, status])
+  @@index([type, status])
+  @@map("scheduled_jobs")
 }

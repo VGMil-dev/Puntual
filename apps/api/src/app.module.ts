@@ -18,6 +18,7 @@ import { AiModule } from './modules/ai/ai.module';
 import { MetricsModule } from './modules/metrics/metrics.module';
 import { AvailabilityModule } from './modules/availability/availability.module';
 import { HoldModule } from './modules/holds/hold.module';
+import { ExpirationModule } from './modules/expiration/expiration.module';
 
 @Module({
   imports: [
@@ -41,6 +42,7 @@ import { HoldModule } from './modules/holds/hold.module';
     MetricsModule,
     AvailabilityModule,
     HoldModule,
+    ExpirationModule,
   ],
   providers: [
     {
