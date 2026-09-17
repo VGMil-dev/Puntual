@@ -210,7 +210,10 @@ export class AuthService {
 
       return {
         message: 'If the email exists, a password reset link has been dispatched',
-        resetToken: process.env.NODE_ENV !== 'production' ? resetToken : undefined,
+        resetToken:
+          process.env.NODE_ENV === 'development' || process.env.NODE_ENV === 'test'
+            ? resetToken
+            : undefined,
       };
     }
 
@@ -320,7 +323,10 @@ export class AuthService {
 
     return {
       user,
-      inviteToken: process.env.NODE_ENV !== 'production' ? inviteToken : undefined,
+      inviteToken:
+        process.env.NODE_ENV === 'development' || process.env.NODE_ENV === 'test'
+          ? inviteToken
+          : undefined,
       initialPassword: undefined,
     };
   }
