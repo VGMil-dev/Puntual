@@ -17,6 +17,7 @@ import { DoctorsModule } from './modules/doctors/doctors.module';
 import { AiModule } from './modules/ai/ai.module';
 import { MetricsModule } from './modules/metrics/metrics.module';
 import { AvailabilityModule } from './modules/availability/availability.module';
+import { HoldModule } from './modules/holds/hold.module';
 
 @Module({
   imports: [
@@ -39,6 +40,7 @@ import { AvailabilityModule } from './modules/availability/availability.module';
     WebhooksModule,
     MetricsModule,
     AvailabilityModule,
+    HoldModule,
   ],
   providers: [
     {
