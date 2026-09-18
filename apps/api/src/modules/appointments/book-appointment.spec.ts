@@ -42,9 +42,9 @@ describe('BookAppointment Use Case (E2.2b-bis / CU-001 paso 4 / RF-025 / RF-029 
   const conversationBId = 'conv-whatsapp-67890';
   const traceId = 'trace-test-12345';
 
-  const baseNow = new Date('2026-09-18T13:00:00.000Z'); // 08:00 America/Guayaquil
-  const validFutureSlotStart = '2026-09-18T14:00:00.000Z'; // 09:00 America/Guayaquil
-  const validFutureSlotEnd = '2026-09-18T14:30:00.000Z';
+  const baseNow = new Date('2026-10-20T13:00:00.000Z'); // 08:00 America/Guayaquil
+  const validFutureSlotStart = '2026-10-20T14:00:00.000Z'; // 09:00 America/Guayaquil
+  const validFutureSlotEnd = '2026-10-20T14:30:00.000Z';
 
   const mockClinicA = {
     id: clinicAId,
@@ -192,6 +192,15 @@ describe('BookAppointment Use Case (E2.2b-bis / CU-001 paso 4 / RF-025 / RF-029 
       },
     };
 
+    const calendarPortMock = {
+      createEvent: jest.fn().mockResolvedValue('mock-calendar-event-id'),
+      updateEvent: jest.fn().mockResolvedValue(undefined),
+      deleteEvent: jest.fn().mockResolvedValue(undefined),
+      generateAuthUrl: jest.fn().mockReturnValue('https://mock-auth-url'),
+      exchangeCodeForTokens: jest.fn().mockResolvedValue({ refreshToken: 'mock-token' }),
+      verifyWritePermissions: jest.fn().mockResolvedValue(true),
+    };
+
     const module: TestingModule = await Test.createTestingModule({
       controllers: [AppointmentsController],
       providers: [
@@ -199,7 +208,7 @@ describe('BookAppointment Use Case (E2.2b-bis / CU-001 paso 4 / RF-025 / RF-029 
         { provide: PrismaService, useValue: prismaMock },
         { provide: HoldService, useValue: holdServiceMock },
         { provide: AvailabilityService, useValue: availabilityServiceMock },
-        { provide: CALENDAR_PORT, useValue: {} },
+        { provide: CALENDAR_PORT, useValue: calendarPortMock },
         { provide: StructuredLoggerService, useValue: loggerMock },
       ],
     }).compile();
@@ -396,7 +405,7 @@ describe('BookAppointment Use Case (E2.2b-bis / CU-001 paso 4 / RF-025 / RF-029 
         status: AppointmentStatus.SOLICITADA,
         startAt: new Date(validFutureSlotStart),
         endAt: new Date(validFutureSlotEnd),
-        holdExpiresAt: new Date(baseNow.getTime() + 500 * 1000),
+        holdExpiresAt: new Date(Date.now() + 500 * 1000),
         createdAt: new Date(),
         updatedAt: new Date(),
       };

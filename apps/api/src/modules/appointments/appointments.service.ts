@@ -4,7 +4,6 @@ import {
   NotFoundException,
   BadRequestException,
   ConflictException,
-  Optional,
 } from '@nestjs/common';
 import { AppointmentStatus, JobStatus } from '@prisma/client';
 import { PrismaService } from '../../infrastructure/prisma/prisma.service';
@@ -51,9 +50,9 @@ export class AppointmentsService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly holdService: HoldService,
-    @Optional() private readonly availabilityService?: AvailabilityService,
-    @Inject(CALENDAR_PORT) @Optional() private readonly calendarPort?: CalendarPort,
-    @Optional() private readonly logger?: StructuredLoggerService,
+    private readonly availabilityService: AvailabilityService,
+    @Inject(CALENDAR_PORT) private readonly calendarPort: CalendarPort,
+    private readonly logger: StructuredLoggerService,
   ) {}
 
   /**
@@ -456,7 +455,7 @@ export class AppointmentsService {
 
     if (existing) {
       if (existing.status === AppointmentStatus.CONFIRMADA) {
-        this.logger?.log(
+        this.logger.log(
           `Idempotent book replay (CONFIRMADA) for appointment ${existing.id} from conversation ${dto.conversationId}`,
           'AppointmentsService',
           {
@@ -479,7 +478,7 @@ export class AppointmentsService {
         existing.holdExpiresAt &&
         existing.holdExpiresAt.getTime() > now.getTime()
       ) {
-        this.logger?.log(
+        this.logger.log(
           `Idempotent book replay (SOLICITADA active hold) for appointment ${existing.id} from conversation ${dto.conversationId}`,
           'AppointmentsService',
           {
@@ -501,10 +500,6 @@ export class AppointmentsService {
     // -------------------------------------------------------------------------
     // Step 4: Validate real-time availability via AvailabilityService (RF-029)
     // -------------------------------------------------------------------------
-    if (!this.availabilityService) {
-      throw new Error('AvailabilityService is not injected');
-    }
-
     const dayAvailability = await this.availabilityService.getAvailabilityForDate(
       dto.clinicId,
       dto.doctorId,
@@ -580,7 +575,7 @@ export class AppointmentsService {
             });
 
             if (existingConcurrent) {
-              this.logger?.log(
+              this.logger.log(
                 `Idempotent concurrent book replay for appointment ${existingConcurrent.id}`,
                 'AppointmentsService',
                 {
@@ -638,7 +633,7 @@ export class AppointmentsService {
         },
       });
     } catch (dbError: any) {
-      this.logger?.error(
+      this.logger.error(
         `Postgres appointment creation failed after acquiring hold. Executing compensating releaseHold...`,
         dbError?.stack,
         'AppointmentsService',
@@ -662,7 +657,7 @@ export class AppointmentsService {
           traceId: dto.traceId,
         });
       } catch (compensationError: any) {
-        this.logger?.error(
+        this.logger.error(
           `Compensation releaseHold failed after Postgres create error`,
           compensationError?.stack,
           'AppointmentsService',
@@ -681,7 +676,7 @@ export class AppointmentsService {
     // -------------------------------------------------------------------------
     // Step 7: Structured logging and return
     // -------------------------------------------------------------------------
-    this.logger?.log(
+    this.logger.log(
       `Appointment booked successfully with hold (status SOLICITADA) for doctor ${dto.doctorId} and patient ${dto.patientId}`,
       'AppointmentsService',
       {
