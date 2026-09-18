@@ -408,7 +408,7 @@ export class HoldService implements OnApplicationBootstrap {
         doctorId: true,
         startAt: true,
         holdExpiresAt: true,
-        reason: true,
+        conversationId: true,
       },
     });
 
@@ -424,7 +424,7 @@ export class HoldService implements OnApplicationBootstrap {
       const startAtIso = appt.startAt.toISOString();
       const slotKey = this.getSlotKey(appt.clinicId, appt.doctorId, startAtIso);
       const counterKey = this.getCounterKey(appt.clinicId, appt.doctorId);
-      const conversationId = (appt as any).conversationId || appt.reason || appt.id;
+      const conversationId = appt.conversationId || appt.id;
 
       desiredSlots.set(slotKey, { conversationId, remainingTtl });
       doctorHoldCounts.set(counterKey, (doctorHoldCounts.get(counterKey) || 0) + 1);

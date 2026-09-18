@@ -534,7 +534,8 @@ describe('AvailabilityService (E2.2a)', () => {
           startAt: new Date('2026-09-18T14:00:00.000Z'),
           endAt: new Date('2026-09-18T14:30:00.000Z'),
           holdExpiresAt: new Date('2026-09-18T13:15:00.000Z'),
-          reason: sameConversationId,
+          conversationId: sameConversationId,
+          reason: 'Consulta general',
         },
       ]);
 

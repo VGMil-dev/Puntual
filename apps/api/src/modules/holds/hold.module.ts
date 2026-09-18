@@ -8,3 +8,4 @@ import { HoldController } from './hold.controller';
   exports: [HoldService],
 })
 export class HoldModule {}
+export { HoldModule as HoldsModule };

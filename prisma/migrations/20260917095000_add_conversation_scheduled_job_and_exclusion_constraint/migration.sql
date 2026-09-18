@@ -66,27 +66,11 @@ CREATE EXTENSION IF NOT EXISTS btree_gist;
 
 -- Partial Exclusion Constraint for Overlapping Active Appointments (RF-025, CU-001)
 -- Enforces that no doctor can have overlapping SOLICITADA or CONFIRMADA appointments
-DO $$
-BEGIN
-  IF NOT EXISTS (
-    SELECT 1 FROM pg_constraint WHERE conname = 'appointment_no_overlapping_active_slots'
-  ) THEN
-    BEGIN
-      ALTER TABLE "appointments" 
-      ADD CONSTRAINT "appointment_no_overlapping_active_slots" 
-      EXCLUDE USING gist (
-        "doctorId" WITH =,
-        tsrange("startAt", "endAt") WITH &&
-      ) 
-      WHERE ("status" IN ('SOLICITADA', 'CONFIRMADA'));
-    EXCEPTION WHEN OTHERS THEN
-      ALTER TABLE appointments 
-      ADD CONSTRAINT appointment_no_overlapping_active_slots 
-      EXCLUDE USING gist (
-        doctor_id WITH =,
-        tstzrange(start_at, end_at) WITH &&
-      ) 
-      WHERE (status IN ('SOLICITADA', 'CONFIRMADA'));
-    END;
-  END IF;
-END $$;
+ALTER TABLE "appointments" 
+  ADD CONSTRAINT "appointment_no_overlapping_active_slots" 
+  EXCLUDE USING gist (
+    "doctorId" WITH =,
+    tsrange("startAt", "endAt") WITH &&
+  ) 
+  WHERE ("status" IN ('SOLICITADA', 'CONFIRMADA'));
+

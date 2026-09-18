@@ -7,6 +7,7 @@ import {
 } from './appointments.service';
 import { PrismaService } from '../../infrastructure/prisma/prisma.service';
 import { HoldService } from '../holds/hold.service';
+import { AvailabilityService } from '../availability/availability.service';
 import { CALENDAR_PORT, CalendarPort } from '../calendar/ports/calendar.port';
 import { StructuredLoggerService } from '../../infrastructure/logging/structured-logger.service';
 import { ConfirmAppointmentDto } from './dto/confirm-appointment.dto';
@@ -128,9 +129,13 @@ describe('ConfirmAppointment Use Case (E2.3 / CU-001 pasos 5-6 / RF-010 / RF-024
         upsert: jest.fn(async ({ where, create, update }: any) => {
           const existing = scheduledJobsDb.get(where.idempotencyKey);
           if (existing) {
+            const newAttempts = update.attempts?.increment
+              ? (existing.attempts || 0) + update.attempts.increment
+              : update.attempts ?? existing.attempts;
             const updated = {
               ...existing,
               ...update,
+              attempts: newAttempts,
               updatedAt: new Date(),
             };
             scheduledJobsDb.set(where.idempotencyKey, updated);
@@ -160,6 +165,13 @@ describe('ConfirmAppointment Use Case (E2.3 / CU-001 pasos 5-6 / RF-010 / RF-024
         AppointmentsService,
         { provide: PrismaService, useValue: prismaMock },
         { provide: HoldService, useValue: holdServiceMock },
+        {
+          provide: AvailabilityService,
+          useValue: {
+            getAvailabilityForDate: jest.fn(),
+            resolveSlotDuration: jest.fn(),
+          },
+        },
         { provide: CALENDAR_PORT, useValue: calendarPortMock },
         { provide: StructuredLoggerService, useValue: loggerMock },
       ],
@@ -449,7 +461,7 @@ describe('ConfirmAppointment Use Case (E2.3 / CU-001 pasos 5-6 / RF-010 / RF-024
       expect(holdServiceMock.releaseHold).toHaveBeenCalledTimes(1);
 
       // 4. ScheduledJob must be enqueued with exact idempotencyKey and payload
-      const expectedIdempotencyKey = `calendar_sync:${clinicAId}:${seeded.id}:intento1`;
+      const expectedIdempotencyKey = `calendar_sync:${clinicAId}:${seeded.id}`;
       const job = scheduledJobsDb.get(expectedIdempotencyKey);
 
       expect(job).toBeDefined();
@@ -459,6 +471,7 @@ describe('ConfirmAppointment Use Case (E2.3 / CU-001 pasos 5-6 / RF-010 / RF-024
       expect(job.status).toBe(JobStatus.PENDING);
       expect(job.idempotencyKey).toBe(expectedIdempotencyKey);
       expect(job.attempts).toBe(1);
+      expect(job.nextRetryAt).toBeDefined();
       expect(job.lastError).toContain('Google Calendar 503 Service Unavailable');
       expect(job.payload).toEqual(
         expect.objectContaining({
@@ -602,6 +615,82 @@ describe('ConfirmAppointment Use Case (E2.3 / CU-001 pasos 5-6 / RF-010 / RF-024
 
       expect(calendarPortMock.createEvent).not.toHaveBeenCalled();
       expect(holdServiceMock.releaseHold).not.toHaveBeenCalled();
+    });
+
+    it('should reject confirmation and NOT grant idempotency if reason contains another conversationId (H2 / RNF-001 / RNF-011)', async () => {
+      // Setup appointment with conversationId A, but reason maliciously or accidentally containing conversationId B
+      const seeded = seedAppointment({
+        status: AppointmentStatus.CONFIRMADA,
+        conversationId: conversationAId,
+        reason: `Consulta de urgencia ${conversationBId}`,
+      });
+
+      const dto: ConfirmAppointmentDto = {
+        appointmentId: seeded.id,
+        clinicId: clinicAId,
+        conversationId: conversationBId, // Mismatched conversation trying to claim idempotency via reason
+      };
+
+      await expect(service.confirmAppointment(dto)).rejects.toThrow(
+        BadRequestException,
+      );
+      await expect(service.confirmAppointment(dto)).rejects.toThrow(
+        'La cita ya fue confirmada previamente por otra conversación',
+      );
+
+      // Verify that in SOLICITADA state, it also strictly rejects
+      const seededSolicitada = seedAppointment({
+        status: AppointmentStatus.SOLICITADA,
+        conversationId: conversationAId,
+        reason: `Limpieza ${conversationBId}`,
+      });
+
+      const dtoSolicitada: ConfirmAppointmentDto = {
+        appointmentId: seededSolicitada.id,
+        clinicId: clinicAId,
+        conversationId: conversationBId,
+      };
+
+      await expect(service.confirmAppointment(dtoSolicitada)).rejects.toThrow(
+        BadRequestException,
+      );
+      await expect(service.confirmAppointment(dtoSolicitada)).rejects.toThrow(
+        'La cita no corresponde a la conversación actual',
+      );
+    });
+
+    it('should maintain a single ScheduledJob and increment attempts on repeated calendar failures (H4 / RNF-011)', async () => {
+      const seeded = seedAppointment();
+      calendarPortMock.createEvent.mockRejectedValue(
+        new Error('Google Calendar 503 Service Unavailable'),
+      );
+
+      const dto: ConfirmAppointmentDto = {
+        appointmentId: seeded.id,
+        clinicId: clinicAId,
+        conversationId: conversationAId,
+      };
+
+      // 1st failure
+      await service.confirmAppointment(dto);
+      const expectedKey = `calendar_sync:${clinicAId}:${seeded.id}`;
+      const job1 = scheduledJobsDb.get(expectedKey);
+      expect(job1).toBeDefined();
+      expect(job1.attempts).toBe(1);
+      expect(job1.nextRetryAt).toBeDefined();
+
+      // Simulate a re-try or repeated failure on the same appointment
+      // Set appointment back to SOLICITADA to simulate partial re-run or repeated failure
+      appointmentsDb.set(seeded.id, {
+        ...seeded,
+        status: AppointmentStatus.SOLICITADA,
+      });
+
+      await service.confirmAppointment(dto);
+      const job2 = scheduledJobsDb.get(expectedKey);
+      expect(job2).toBeDefined();
+      expect(job2.attempts).toBe(2);
+      expect(scheduledJobsDb.size).toBe(1); // exactly 1 ScheduledJob created
     });
   });
 });

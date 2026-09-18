@@ -320,6 +320,7 @@ model ScheduledJob {
   status         JobStatus @default(PENDING)
   idempotencyKey String    @unique // tipo:clinicaId:entidadId:fechaEjecucion
   attempts       Int       @default(0)
+  nextRetryAt    DateTime?
   payload        Json?
   lastError      String?
   createdAt      DateTime  @default(now())
@@ -329,5 +330,6 @@ model ScheduledJob {
 
   @@index([clinicId, status])
   @@index([type, status])
+  @@index([type, status, nextRetryAt])
   @@map("scheduled_jobs")
 }

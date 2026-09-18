@@ -221,6 +221,7 @@ export class AvailabilityService {
       startAt: Date;
       endAt: Date;
       holdExpiresAt: Date | null;
+      conversationId?: string | null;
       reason: string | null;
     }>;
     now: Date;
@@ -322,9 +323,7 @@ export class AvailabilityService {
             // Hold is active: check if it belongs to the same conversation
             const isSameConversation =
               Boolean(conversationId) &&
-              ((appt as any).conversationId === conversationId ||
-                appt.reason === conversationId ||
-                (appt.reason && appt.reason.includes(conversationId)));
+              appt.conversationId === conversationId;
 
             if (isSameConversation) {
               return false; // Same conversation hold does not block itself

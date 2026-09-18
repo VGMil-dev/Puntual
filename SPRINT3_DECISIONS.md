@@ -55,3 +55,20 @@
   - **Expiración:** Mecanismo dual: verificación perezosa (`lazy`) en lecturas/confirmaciones + barrido periódico de citas `SOLICITADA` con `holdExpiresAt < NOW()` vía `scheduled_jobs`. Cero dependencia exclusiva de Redis Keyspace Notifications.
   - **Reconciliación:** En arranque del servicio backend, se sincronizan los contadores de Redis leyendo los holds no expirados de PostgreSQL.
 - **Justificación:** Garantiza que incluso ante reinicio de Redis o bugs de red, ninguna doble reserva puede persistirse en base de datos.
+
+---
+
+### Decisión D9 — Mecanismo de Reintento y Backoff Exponencial para `calendar_sync` (RNF-006 / H3)
+- **Contexto:** RNF-006 exige tolerancia a fallos y reintentos para la sincronización asíncrona de Google Calendar (máximo 5 intentos en una ventana de 24h, alertando a Super Admin si se agotan). La revisión de PR #4 (hallazgos H3 y H4) constató la ausencia de un consumidor activo para los `scheduled_jobs` tipo `calendar_sync` y una clave de idempotencia incorrecta con el literal `intento1`.
+- **Resolución:**
+  1. **Esquema Prisma (`ScheduledJob`):** Se añade el campo `nextRetryAt DateTime?` y el índice compuesto `@@index([type, status, nextRetryAt])`. Esto permite que el worker filtre directamente a nivel de base de datos (`WHERE nextRetryAt <= NOW()`) sin saturar la memoria del proceso con jobs que aún están en periodo de espera.
+  2. **Política de Backoff Exponencial:**
+     - Intento 1 (inicial tras fallo en confirmación): `nextRetryAt = now + 1 min` (60s).
+     - Intento 2: `nextRetryAt = now + 5 min` (300s).
+     - Intento 3: `nextRetryAt = now + 30 min` (1800s).
+     - Intento 4: `nextRetryAt = now + 2 horas` (7200s).
+     - Intento 5: `nextRetryAt = now + 6 horas` (21600s).
+     - Si el 5º intento falla: el job pasa a `status: FAILED` de forma permanente y se emite un log estructurado de nivel `error` con evento `CalendarSyncPermanentFailure` (alerta a Super Admin).
+  3. **Idempotencia Estricta (RNF-011):** La clave es fija por cita: `calendar_sync:${clinicId}:${appointmentId}` (sin `:intento1`). En reintentos concurrentes o repetidos, el `upsert` incrementa atómicamente el campo `attempts` (`attempts: { increment: 1 }`).
+  4. **Worker Desacoplado:** Se implementa `CalendarSyncWorker` en `apps/api/src/modules/appointments/calendar-sync.worker.ts` implementando `OnModuleInit` y `OnModuleDestroy` con temporizador periódico (intervalo por variable de entorno `CALENDAR_SYNC_INTERVAL_SECONDS`, default 60s, con `.unref()` en Node.js para no bloquear el apagado graceful).
+- **Justificación:** Cumplimiento estricto de RNF-006 y RNF-011 sin introducir BullMQ prematuramente en Sprint 3 (alineado con la Guía de Arquitectura §17 y §33).

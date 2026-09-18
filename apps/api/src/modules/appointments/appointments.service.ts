@@ -3,13 +3,17 @@ import {
   Inject,
   NotFoundException,
   BadRequestException,
+  ConflictException,
+  Optional,
 } from '@nestjs/common';
 import { AppointmentStatus, JobStatus } from '@prisma/client';
 import { PrismaService } from '../../infrastructure/prisma/prisma.service';
 import { HoldService } from '../holds/hold.service';
+import { AvailabilityService } from '../availability/availability.service';
 import { CALENDAR_PORT, CalendarPort } from '../calendar/ports/calendar.port';
 import { StructuredLoggerService } from '../../infrastructure/logging/structured-logger.service';
 import { ConfirmAppointmentDto } from './dto/confirm-appointment.dto';
+import { BookAppointmentDto } from './dto/book-appointment.dto';
 
 export interface ConfirmAppointmentOptions {
   nowOverride?: Date;
@@ -26,9 +30,19 @@ export interface ConfirmAppointmentResult {
   isIdempotentReplay?: boolean;
 }
 
+export interface BookAppointmentOptions {
+  nowOverride?: Date;
+}
+
+export interface BookAppointmentResult {
+  appointment: any;
+  isIdempotentReplay: boolean;
+  status: AppointmentStatus;
+}
+
 /**
- * AppointmentsService: Handles confirmation, notification, and Google Calendar sync (CU-001 steps 5-6).
- * Enforces atomic Postgres transactions, multi-tenant boundaries (RNF-001), Redis hold releases (RF-025),
+ * AppointmentsService: Handles booking (hold acquisition + Postgres creation) and confirmation (CU-001 steps 4-6).
+ * Enforces atomic Postgres transactions, multi-tenant boundaries (RNF-001), Redis hold releases/compensation (RF-025),
  * CalendarPort abstraction (RNF-010), idempotent re-entries (RNF-011), partial failure tolerance (RNF-006),
  * and WhatsApp 24h direct window compliance (RF-024).
  */
@@ -37,8 +51,9 @@ export class AppointmentsService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly holdService: HoldService,
-    @Inject(CALENDAR_PORT) private readonly calendarPort: CalendarPort,
-    private readonly logger: StructuredLoggerService,
+    @Optional() private readonly availabilityService?: AvailabilityService,
+    @Inject(CALENDAR_PORT) @Optional() private readonly calendarPort?: CalendarPort,
+    @Optional() private readonly logger?: StructuredLoggerService,
   ) {}
 
   /**
@@ -94,10 +109,7 @@ export class AppointmentsService {
         // Idempotency check (RNF-011): if already CONFIRMADA
         if (existing.status === AppointmentStatus.CONFIRMADA) {
           const isSameConversation =
-            existing.conversationId === dto.conversationId ||
-            existing.reason === dto.conversationId ||
-            (Boolean(existing.reason) &&
-              existing.reason!.includes(dto.conversationId));
+            existing.conversationId === dto.conversationId;
 
           if (!isSameConversation) {
             throw new BadRequestException(
@@ -268,11 +280,14 @@ export class AppointmentsService {
         // -----------------------------------------------------------------------
         calendarSyncStatus = 'PENDING';
         const executionDate = now.toISOString().split('T')[0];
-        const idempotencyKey = `calendar_sync:${appointment.clinicId}:${appointment.id}:intento1`;
+        const idempotencyKey = `calendar_sync:${appointment.clinicId}:${appointment.id}`;
+        const firstRetryAt = new Date(now.getTime() + 60 * 1000); // Backoff inicial: 1 minuto (Decisión D9 / RNF-006)
 
         const job = await this.prisma.scheduledJob.upsert({
           where: { idempotencyKey },
           update: {
+            attempts: { increment: 1 },
+            nextRetryAt: firstRetryAt,
             lastError: calendarError.message || String(calendarError),
             updatedAt: now,
           },
@@ -284,9 +299,11 @@ export class AppointmentsService {
             status: JobStatus.PENDING,
             idempotencyKey,
             attempts: 1,
+            nextRetryAt: firstRetryAt,
             payload: {
               doctorId: doctor.id,
               calendarId: doctor.googleCalendarId,
+              refreshTokenCipher: doctor.googleRefreshTokenCipher,
               summary,
               description,
               startAt: appointment.startAt.toISOString(),
@@ -351,6 +368,339 @@ export class AppointmentsService {
       scheduledJobId,
       patientMessage,
       isIdempotentReplay: false,
+    };
+  }
+
+  /**
+   * Books an appointment with atomic distributed hold (Ticket E2.2b-bis / CU-001 step 4 / RF-025 / RF-029 / RNF-001 / RNF-011).
+   * 1. Validates tenant scoping: clinic, doctor, and patient existence.
+   * 2. Strict idempotency pre-check (RNF-011): returns existing appointment if already SOLICITADA (active) or CONFIRMADA.
+   * 3. Validates real-time availability using AvailabilityService (RF-029 hierarchy and slot checking).
+   * 4. Acquires atomic hold in Redis via HoldService.acquireHold (CU-001 Alt Flow C).
+   * 5. Creates Appointment in Postgres (status: SOLICITADA, holdExpiresAt: now + ttl).
+   * 6. Mandatory compensation: if Postgres creation fails after acquiring hold, releases hold immediately.
+   * 7. Structured logging with traceId, clinicId, doctorId, conversationId, appointmentId.
+   */
+  async bookAppointment(
+    dto: BookAppointmentDto,
+    options?: BookAppointmentOptions,
+  ): Promise<BookAppointmentResult> {
+    const now = options?.nowOverride || new Date();
+
+    // -------------------------------------------------------------------------
+    // Step 1: Validate date and time
+    // -------------------------------------------------------------------------
+    const startAtDate = new Date(dto.startAt);
+    if (isNaN(startAtDate.getTime())) {
+      throw new BadRequestException('Formato de fecha inválido para startAt');
+    }
+
+    if (startAtDate.getTime() <= now.getTime()) {
+      throw new BadRequestException('El horario seleccionado está en el pasado');
+    }
+
+    // -------------------------------------------------------------------------
+    // Step 2: Validate multi-tenant boundaries (RNF-001)
+    // -------------------------------------------------------------------------
+    const clinic = await this.prisma.clinic.findUnique({
+      where: { id: dto.clinicId },
+    });
+    if (!clinic) {
+      throw new NotFoundException(`Clínica con id ${dto.clinicId} no encontrada`);
+    }
+
+    const doctor = await this.prisma.doctor.findFirst({
+      where: {
+        clinicId: dto.clinicId,
+        id: dto.doctorId,
+      },
+    });
+    if (!doctor) {
+      throw new NotFoundException(
+        `Doctor con id ${dto.doctorId} no encontrado en la clínica especificada`,
+      );
+    }
+
+    const patient = await this.prisma.patient.findFirst({
+      where: {
+        clinicId: dto.clinicId,
+        id: dto.patientId,
+      },
+    });
+    if (!patient) {
+      throw new NotFoundException(
+        `Paciente con id ${dto.patientId} no encontrado en la clínica especificada`,
+      );
+    }
+
+    // -------------------------------------------------------------------------
+    // Step 3: Strict Idempotency Check (RNF-011)
+    // Same conversationId + doctorId + clinicId + startAt
+    // -------------------------------------------------------------------------
+    const existing = await this.prisma.appointment.findFirst({
+      where: {
+        clinicId: dto.clinicId,
+        doctorId: dto.doctorId,
+        conversationId: dto.conversationId,
+        startAt: startAtDate,
+        status: {
+          in: [AppointmentStatus.SOLICITADA, AppointmentStatus.CONFIRMADA],
+        },
+      },
+      include: {
+        doctor: true,
+        patient: true,
+        clinic: true,
+      },
+    });
+
+    if (existing) {
+      if (existing.status === AppointmentStatus.CONFIRMADA) {
+        this.logger?.log(
+          `Idempotent book replay (CONFIRMADA) for appointment ${existing.id} from conversation ${dto.conversationId}`,
+          'AppointmentsService',
+          {
+            traceId: dto.traceId,
+            clinicId: dto.clinicId,
+            doctorId: dto.doctorId,
+            conversationId: dto.conversationId,
+            appointmentId: existing.id,
+          },
+        );
+        return {
+          appointment: existing,
+          isIdempotentReplay: true,
+          status: existing.status,
+        };
+      }
+
+      if (
+        existing.status === AppointmentStatus.SOLICITADA &&
+        existing.holdExpiresAt &&
+        existing.holdExpiresAt.getTime() > now.getTime()
+      ) {
+        this.logger?.log(
+          `Idempotent book replay (SOLICITADA active hold) for appointment ${existing.id} from conversation ${dto.conversationId}`,
+          'AppointmentsService',
+          {
+            traceId: dto.traceId,
+            clinicId: dto.clinicId,
+            doctorId: dto.doctorId,
+            conversationId: dto.conversationId,
+            appointmentId: existing.id,
+          },
+        );
+        return {
+          appointment: existing,
+          isIdempotentReplay: true,
+          status: existing.status,
+        };
+      }
+    }
+
+    // -------------------------------------------------------------------------
+    // Step 4: Validate real-time availability via AvailabilityService (RF-029)
+    // -------------------------------------------------------------------------
+    if (!this.availabilityService) {
+      throw new Error('AvailabilityService is not injected');
+    }
+
+    const dayAvailability = await this.availabilityService.getAvailabilityForDate(
+      dto.clinicId,
+      dto.doctorId,
+      dto.startAt,
+      {
+        specialtyId: dto.specialtyId,
+        motivo: dto.motivo,
+        conversationId: dto.conversationId,
+        now,
+      },
+    );
+
+    const matchingSlot = dayAvailability?.slots?.find(
+      (slot) => new Date(slot.startAt).getTime() === startAtDate.getTime(),
+    );
+
+    if (!matchingSlot) {
+      throw new ConflictException(
+        'El horario seleccionado no se encuentra disponible para el doctor especificado',
+      );
+    }
+
+    const endAtDate = new Date(matchingSlot.endAt);
+
+    // -------------------------------------------------------------------------
+    // Step 5: Acquire atomic Redis hold via HoldService (CU-001 Alt Flow C)
+    // -------------------------------------------------------------------------
+    const ttl = dto.ttlSeconds && dto.ttlSeconds > 0 ? dto.ttlSeconds : 900;
+
+    const holdResult = await this.holdService.acquireHold({
+      clinicId: dto.clinicId,
+      doctorId: dto.doctorId,
+      startAt: startAtDate,
+      conversationId: dto.conversationId,
+      ttlSeconds: ttl,
+      traceId: dto.traceId,
+    });
+
+    if (!holdResult.success) {
+      if (holdResult.reason === 'MAX_HOLDS_EXCEEDED') {
+        throw new ConflictException(
+          'El doctor ha alcanzado el límite máximo de reservas concurrentes simultáneas',
+        );
+      }
+      if (holdResult.reason === 'SLOT_ALREADY_LOCKED') {
+        // Check if the slot was locked by this conversation (concurrent idempotent replay)
+        const currentHold = await this.holdService.getHold(
+          dto.clinicId,
+          dto.doctorId,
+          startAtDate,
+        );
+
+        const holdOwner = typeof currentHold === 'string' ? currentHold : (currentHold as any)?.conversationId;
+        if (holdOwner === dto.conversationId) {
+          // Wait briefly for Postgres write from the winning concurrent worker if needed
+          let attempts = 0;
+          while (attempts < 10) {
+            const existingConcurrent = await this.prisma.appointment.findFirst({
+              where: {
+                clinicId: dto.clinicId,
+                doctorId: dto.doctorId,
+                conversationId: dto.conversationId,
+                startAt: startAtDate,
+                status: {
+                  in: [AppointmentStatus.SOLICITADA, AppointmentStatus.CONFIRMADA],
+                },
+              },
+              include: {
+                doctor: true,
+                patient: true,
+                clinic: true,
+              },
+            });
+
+            if (existingConcurrent) {
+              this.logger?.log(
+                `Idempotent concurrent book replay for appointment ${existingConcurrent.id}`,
+                'AppointmentsService',
+                {
+                  traceId: dto.traceId,
+                  clinicId: dto.clinicId,
+                  doctorId: dto.doctorId,
+                  conversationId: dto.conversationId,
+                  appointmentId: existingConcurrent.id,
+                },
+              );
+              return {
+                appointment: existingConcurrent,
+                isIdempotentReplay: true,
+                status: existingConcurrent.status,
+              };
+            }
+            attempts++;
+            await new Promise((resolve) => setTimeout(resolve, 15));
+          }
+        }
+
+        throw new ConflictException(
+          'El horario seleccionado ya se encuentra temporalmente bloqueado por otra solicitud',
+        );
+      }
+      throw new ConflictException(
+        `No fue posible adquirir el bloqueo temporal del horario: ${holdResult.reason}`,
+      );
+    }
+
+    // -------------------------------------------------------------------------
+    // Step 6: Create Appointment in Postgres with mandatory compensation
+    // -------------------------------------------------------------------------
+    const holdExpiresAt =
+      holdResult.expiresAt || new Date(now.getTime() + ttl * 1000);
+
+    let appointment;
+    try {
+      appointment = await this.prisma.appointment.create({
+        data: {
+          clinicId: dto.clinicId,
+          doctorId: dto.doctorId,
+          patientId: dto.patientId,
+          conversationId: dto.conversationId,
+          status: AppointmentStatus.SOLICITADA,
+          startAt: startAtDate,
+          endAt: endAtDate,
+          reason: dto.motivo,
+          holdExpiresAt,
+        },
+        include: {
+          doctor: true,
+          patient: true,
+          clinic: true,
+        },
+      });
+    } catch (dbError: any) {
+      this.logger?.error(
+        `Postgres appointment creation failed after acquiring hold. Executing compensating releaseHold...`,
+        dbError?.stack,
+        'AppointmentsService',
+        {
+          traceId: dto.traceId,
+          clinicId: dto.clinicId,
+          doctorId: dto.doctorId,
+          conversationId: dto.conversationId,
+          startAt: startAtDate.toISOString(),
+          errorMessage: dbError?.message,
+        },
+      );
+
+      // Mandatory compensation: release Redis hold
+      try {
+        await this.holdService.releaseHold({
+          clinicId: dto.clinicId,
+          doctorId: dto.doctorId,
+          startAt: startAtDate,
+          conversationId: dto.conversationId,
+          traceId: dto.traceId,
+        });
+      } catch (compensationError: any) {
+        this.logger?.error(
+          `Compensation releaseHold failed after Postgres create error`,
+          compensationError?.stack,
+          'AppointmentsService',
+          {
+            traceId: dto.traceId,
+            clinicId: dto.clinicId,
+            doctorId: dto.doctorId,
+            conversationId: dto.conversationId,
+          },
+        );
+      }
+
+      throw dbError;
+    }
+
+    // -------------------------------------------------------------------------
+    // Step 7: Structured logging and return
+    // -------------------------------------------------------------------------
+    this.logger?.log(
+      `Appointment booked successfully with hold (status SOLICITADA) for doctor ${dto.doctorId} and patient ${dto.patientId}`,
+      'AppointmentsService',
+      {
+        traceId: dto.traceId,
+        clinicId: dto.clinicId,
+        doctorId: dto.doctorId,
+        patientId: dto.patientId,
+        conversationId: dto.conversationId,
+        appointmentId: appointment.id,
+        startAt: appointment.startAt.toISOString(),
+        endAt: appointment.endAt.toISOString(),
+        holdExpiresAt: holdExpiresAt.toISOString(),
+      },
+    );
+
+    return {
+      appointment,
+      isIdempotentReplay: false,
+      status: appointment.status,
     };
   }
 }

@@ -567,7 +567,7 @@ describe('HoldService (E2.2b - Distributed Redis Locking & Atomic Hold)', () => 
           doctorId: mockDoctorId,
           startAt: new Date('2026-09-18T14:00:00.000Z'),
           holdExpiresAt: futureExpires1,
-          reason: 'conv-patient-1',
+          conversationId: 'conv-patient-1',
         },
         {
           id: 'appt-2',
@@ -575,7 +575,7 @@ describe('HoldService (E2.2b - Distributed Redis Locking & Atomic Hold)', () => 
           doctorId: mockDoctorId,
           startAt: new Date('2026-09-18T14:30:00.000Z'),
           holdExpiresAt: futureExpires2,
-          reason: 'conv-patient-2',
+          conversationId: 'conv-patient-2',
         },
       ]);
 
@@ -637,7 +637,7 @@ describe('HoldService (E2.2b - Distributed Redis Locking & Atomic Hold)', () => 
           doctorId: mockDoctorId,
           startAt: new Date('2026-09-18T14:00:00.000Z'),
           holdExpiresAt: futureExpires1,
-          reason: 'conv-valid',
+          conversationId: 'conv-valid',
         },
       ]);
 

@@ -1,5 +1,11 @@
 import { Test, TestingModule } from '@nestjs/testing';
-import { INestApplication, ValidationPipe } from '@nestjs/common';
+import {
+  INestApplication,
+  ValidationPipe,
+  ConflictException,
+  NotFoundException,
+  BadRequestException,
+} from '@nestjs/common';
 import request from 'supertest';
 import { AppointmentStatus, JobStatus } from '@prisma/client';
 import {
@@ -16,10 +22,20 @@ import { LoggingModule } from '../src/infrastructure/logging/logging.module';
 import { PrismaService } from '../src/infrastructure/prisma/prisma.service';
 import { RedisService } from '../src/infrastructure/redis/redis.service';
 import { StructuredLoggerService } from '../src/infrastructure/logging/structured-logger.service';
+import { AppointmentsService } from '../src/modules/appointments/appointments.service';
+import { AppointmentsModule } from '../src/modules/appointments/appointments.module';
+import { BookAppointmentDto } from '../src/modules/appointments/dto/book-appointment.dto';
+import { AvailabilityService } from '../src/modules/availability/availability.service';
+import { AvailabilityModule } from '../src/modules/availability/availability.module';
+import { CALENDAR_PORT } from '../src/modules/calendar/ports/calendar.port';
 
 /**
  * ============================================================================
  * TEST PROTOCOL DECLARATION (Skill-First):
+ * - nestjs-testing-expert
+ * - testing-for-broken-access-control
+ * - testing-api-for-broken-object-level-authorization
+ * - redis-observability
  * - concurrency-testing
  * - load-generation
  * - evidence-capture
@@ -27,7 +43,11 @@ import { StructuredLoggerService } from '../src/infrastructure/logging/structure
  *
  * TRACEABILITY:
  * - RF-025: Atomic slot holds & distributed locking via Redis Lua scripts
+ * - RF-029: Real-time availability calculation & slot validation
+ * - RNF-001: Multi-tenant boundary isolation across clinics, doctors, patients
  * - RNF-011: High concurrency protection, race condition prevention & idempotency
+ * - CU-001 Paso 4: BookAppointment with distributed hold & Postgres creation
+ * - CU-001 Alt Flow C: Concurrent slot conflict handling (409 ConflictException)
  * - DoD §10: Automated concurrency validation under heavy concurrent loads
  * ============================================================================
  */
@@ -234,6 +254,7 @@ class HybridRedisHarness {
 class HybridPrismaHarness {
   public clinics = new Map<string, any>();
   public doctors = new Map<string, any>();
+  public patients = new Map<string, any>();
   public appointments = new Map<string, any>();
   public scheduledJobs = new Map<string, any>();
 
@@ -247,6 +268,13 @@ class HybridPrismaHarness {
       name: 'Clínica San Juan Concurrency',
       slug: 'clinica-san-juan-concurrency',
       maxConcurrentHolds: 3,
+    });
+
+    this.clinics.set('11111111-1111-4111-a111-111111111112', {
+      id: '11111111-1111-4111-a111-111111111112',
+      name: 'Clínica Beta Isolation',
+      slug: 'clinica-beta-isolation',
+      maxConcurrentHolds: 5,
     });
 
     // Doctor 1: maxConcurrentHolds = 5 (Single-slot concurrency test)
@@ -284,10 +312,69 @@ class HybridPrismaHarness {
       maxConcurrentHolds: 5,
       clinic: { maxConcurrentHolds: 3 },
     });
+
+    // Doctor 5: Concurrent BookAppointment doctor
+    this.doctors.set('22222222-2222-4222-a222-222222222225', {
+      id: '22222222-2222-4222-a222-222222222225',
+      clinicId: '11111111-1111-4111-a111-111111111111',
+      name: 'Dr. Concurrency BookSlot',
+      maxConcurrentHolds: 10,
+      clinic: { maxConcurrentHolds: 3 },
+    });
+
+    // Doctor 6: Postgres failure compensation doctor
+    this.doctors.set('22222222-2222-4222-a222-222222222226', {
+      id: '22222222-2222-4222-a222-222222222226',
+      clinicId: '11111111-1111-4111-a111-111111111111',
+      name: 'Dr. Concurrency Compensation',
+      maxConcurrentHolds: 5,
+      clinic: { maxConcurrentHolds: 3 },
+    });
+
+    // Doctor 7: Concurrent Idempotent Book doctor
+    this.doctors.set('22222222-2222-4222-a222-222222222227', {
+      id: '22222222-2222-4222-a222-222222222227',
+      clinicId: '11111111-1111-4111-a111-111111111111',
+      name: 'Dr. Concurrency BookIdempotent',
+      maxConcurrentHolds: 5,
+      clinic: { maxConcurrentHolds: 3 },
+    });
+
+    // Doctor Foreign: Belongs to Clinic 2 (Tenant isolation)
+    this.doctors.set('22222222-2222-4222-a222-222222222228', {
+      id: '22222222-2222-4222-a222-222222222228',
+      clinicId: '11111111-1111-4111-a111-111111111112',
+      name: 'Dr. Foreign ClinicBeta',
+      maxConcurrentHolds: 5,
+      clinic: { maxConcurrentHolds: 5 },
+    });
+
+    // Patient 1: Belongs to Clinic 1
+    this.patients.set('44444444-4444-4444-a444-444444444441', {
+      id: '44444444-4444-4444-a444-444444444441',
+      clinicId: '11111111-1111-4111-a111-111111111111',
+      name: 'Paciente Uno Concurrency',
+      phone: '+593991111111',
+    });
+
+    // Patient Foreign: Belongs to Clinic 2 (Tenant isolation)
+    this.patients.set('44444444-4444-4444-a444-444444444442', {
+      id: '44444444-4444-4444-a444-444444444442',
+      clinicId: '11111111-1111-4111-a111-111111111112',
+      name: 'Paciente Foreign Beta',
+      phone: '+593992222222',
+    });
   }
 
   doctor = {
     findFirst: jest.fn(async ({ where }: any) => {
+      const doc = this.doctors.get(where.id);
+      if (doc && (!where.clinicId || doc.clinicId === where.clinicId)) {
+        return doc;
+      }
+      return null;
+    }),
+    findUnique: jest.fn(async ({ where }: any) => {
       const doc = this.doctors.get(where.id);
       if (doc && (!where.clinicId || doc.clinicId === where.clinicId)) {
         return doc;
@@ -300,11 +387,53 @@ class HybridPrismaHarness {
     findFirst: jest.fn(async ({ where }: any) => {
       return this.clinics.get(where.id) || null;
     }),
+    findUnique: jest.fn(async ({ where }: any) => {
+      return this.clinics.get(where.id) || null;
+    }),
+  };
+
+  patient = {
+    findFirst: jest.fn(async ({ where }: any) => {
+      for (const pat of this.patients.values()) {
+        let match = true;
+        if (where.id && pat.id !== where.id) match = false;
+        if (where.clinicId && pat.clinicId !== where.clinicId) match = false;
+        if (match) return pat;
+      }
+      return null;
+    }),
+    findUnique: jest.fn(async ({ where }: any) => {
+      return this.patients.get(where.id) || null;
+    }),
   };
 
   appointment = {
     findUnique: jest.fn(async ({ where }: any) => {
       return this.appointments.get(where.id) || null;
+    }),
+    findFirst: jest.fn(async ({ where, include }: any) => {
+      for (const appt of this.appointments.values()) {
+        if (where.id && appt.id !== where.id) continue;
+        if (where.clinicId && appt.clinicId !== where.clinicId) continue;
+        if (where.doctorId && appt.doctorId !== where.doctorId) continue;
+        if (where.patientId && appt.patientId !== where.patientId) continue;
+        if (where.conversationId && appt.conversationId !== where.conversationId) continue;
+        if (where.startAt) {
+          const whereTime = new Date(where.startAt).getTime();
+          const apptTime = new Date(appt.startAt).getTime();
+          if (whereTime !== apptTime) continue;
+        }
+        if (where.status) {
+          if (where.status.in && !where.status.in.includes(appt.status)) continue;
+          if (typeof where.status === 'string' && appt.status !== where.status) continue;
+        }
+        const res = { ...appt };
+        if (include?.doctor) res.doctor = this.doctors.get(appt.doctorId);
+        if (include?.patient) res.patient = this.patients.get(appt.patientId);
+        if (include?.clinic) res.clinic = this.clinics.get(appt.clinicId);
+        return res;
+      }
+      return null;
     }),
     findMany: jest.fn(async ({ where }: any) => {
       const results: any[] = [];
@@ -329,11 +458,22 @@ class HybridPrismaHarness {
       }
       return count;
     }),
-    create: jest.fn(async ({ data }: any) => {
-      const id = data.id || `appt-${Date.now()}-${Math.random()}`;
-      const record = { ...data, id, createdAt: new Date(), updatedAt: new Date() };
+    create: jest.fn(async ({ data, include }: any) => {
+      const id = data.id || `appt-${Date.now()}-${Math.floor(Math.random() * 1000000)}`;
+      const record = {
+        ...data,
+        id,
+        startAt: new Date(data.startAt),
+        endAt: new Date(data.endAt),
+        createdAt: new Date(),
+        updatedAt: new Date(),
+      };
       this.appointments.set(id, record);
-      return record;
+      const res = { ...record };
+      if (include?.doctor) res.doctor = this.doctors.get(data.doctorId);
+      if (include?.patient) res.patient = this.patients.get(data.patientId);
+      if (include?.clinic) res.clinic = this.clinics.get(data.clinicId);
+      return res;
     }),
     update: jest.fn(async ({ where, data }: any) => {
       const existing = this.appointments.get(where.id);
@@ -373,19 +513,45 @@ describe('Automated Concurrency Test Suite (E2.2d / RF-025 / RNF-011 / DoD §10)
   let app: INestApplication;
   let holdService: HoldService;
   let expirationService: ExpirationService;
+  let appointmentsService: AppointmentsService;
   let redisHarness: HybridRedisHarness;
   let prismaHarness: HybridPrismaHarness;
 
   const CLINIC_ID = '11111111-1111-4111-a111-111111111111';
+  const CLINIC_2_ID = '11111111-1111-4111-a111-111111111112';
   const DOCTOR_1_ID = '22222222-2222-4222-a222-222222222221';
   const DOCTOR_2_ID = '22222222-2222-4222-a222-222222222222';
   const DOCTOR_3_ID = '22222222-2222-4222-a222-222222222223';
   const DOCTOR_4_ID = '22222222-2222-4222-a222-222222222224';
+  const DOCTOR_5_ID = '22222222-2222-4222-a222-222222222225';
+  const DOCTOR_6_ID = '22222222-2222-4222-a222-222222222226';
+  const DOCTOR_7_ID = '22222222-2222-4222-a222-222222222227';
+  const DOCTOR_FOREIGN_ID = '22222222-2222-4222-a222-222222222228';
+  const PATIENT_1_ID = '44444444-4444-4444-a444-444444444441';
+  const PATIENT_FOREIGN_ID = '44444444-4444-4444-a444-444444444442';
 
   beforeAll(async () => {
     redisHarness = new HybridRedisHarness();
     await redisHarness.init();
     prismaHarness = new HybridPrismaHarness();
+
+    const availabilityHarness = {
+      resolveSlotDuration: jest.fn().mockResolvedValue(30),
+      getAvailabilityForDate: jest.fn().mockImplementation(async (clinicId, doctorId, dateStr) => {
+        const startAt = typeof dateStr === 'string' ? dateStr : dateStr.toISOString();
+        const endAt = new Date(new Date(startAt).getTime() + 30 * 60000).toISOString();
+        return {
+          date: startAt.split('T')[0],
+          slots: [
+            {
+              startAt,
+              endAt,
+              durationMinutes: 30,
+            },
+          ],
+        };
+      }),
+    };
 
     const moduleFixture: TestingModule = await Test.createTestingModule({
       imports: [
@@ -394,16 +560,29 @@ describe('Automated Concurrency Test Suite (E2.2d / RF-025 / RNF-011 / DoD §10)
         RedisModule,
         HoldModule,
         ExpirationModule,
+        AvailabilityModule,
+      ],
+      providers: [
+        AppointmentsService,
+        {
+          provide: CALENDAR_PORT,
+          useValue: {
+            createEvent: jest.fn().mockResolvedValue('cal-event-123'),
+          },
+        },
       ],
     })
       .overrideProvider(RedisService)
       .useValue(redisHarness)
       .overrideProvider(PrismaService)
       .useValue(prismaHarness)
+      .overrideProvider(AvailabilityService)
+      .useValue(availabilityHarness)
       .compile();
 
     holdService = moduleFixture.get<HoldService>(HoldService);
     expirationService = moduleFixture.get<ExpirationService>(ExpirationService);
+    appointmentsService = moduleFixture.get<AppointmentsService>(AppointmentsService);
 
     app = moduleFixture.createNestApplication();
     app.useGlobalPipes(
@@ -425,6 +604,14 @@ describe('Automated Concurrency Test Suite (E2.2d / RF-025 / RNF-011 / DoD §10)
     console.log('\n' + '='.repeat(90));
     console.log('             PUNTUAL CONCURRENCY AND RESILIENCE VALIDATION REPORT (DoD §10)');
     console.log('='.repeat(90));
+    console.log(
+      `Redis Environment : ${
+        redisHarness.isRealRedis
+          ? 'REAL REDIS (ioredis client connected to ' + (process.env.REDIS_URL || 'redis://localhost:6379') + ')'
+          : 'IN-MEMORY SIMULATOR (HybridRedisHarness atomic Lua engine)'
+      }`,
+    );
+    console.log('-'.repeat(90));
     console.log(
       'Scenario'.padEnd(36) +
         'Reqs'.padStart(6) +
@@ -924,6 +1111,420 @@ describe('Automated Concurrency Test Suite (E2.2d / RF-025 / RNF-011 / DoD §10)
       totalDurationMs,
       avgLatencyMs: totalDurationMs / 2,
       redisDoctorCounter: doctorCounter,
+      redisSlotLocked: false,
+      dbConsistent: true,
+    });
+  });
+
+  /**
+   * ============================================================================
+   * ESCENARIO 5: N peticiones concurrentes simultáneas de `book` (20 simultáneas vía Promise.all)
+   * compitiendo exactamente por el mismo slot del mismo doctor.
+   *
+   * Verificación:
+   * - EXACTAMENTE 1 gana el hold y crea la cita con estado SOLICITADA en Postgres.
+   * - EXACTAMENTE 19 (N-1) son rechazadas por ConflictException (409).
+   * - Sin filas huérfanas en Postgres ni desbalance en Redis (contador = 1).
+   * - Slot key en Redis queda bloqueado a nombre de la conversación ganadora.
+   * ============================================================================
+   */
+  it('Escenario 5: 20 peticiones concurrentes de book compitiendo por el mismo slot -> EXACTAMENTE 1 crea Appointment en Postgres y adquiere hold, 19 rechazadas con ConflictException', async () => {
+    const N = 20;
+    const slotTime = '2026-09-29T10:00:00.000Z';
+    const testNow = new Date('2026-09-28T10:00:00.000Z');
+
+    const requests = Array.from({ length: N }, (_, index) => {
+      const convId = `conv-scen5-book-${String(index + 1).padStart(2, '0')}`;
+      const dto: BookAppointmentDto = {
+        clinicId: CLINIC_ID,
+        doctorId: DOCTOR_5_ID,
+        patientId: PATIENT_1_ID,
+        conversationId: convId,
+        startAt: slotTime,
+        motivo: 'Consulta general concurrencia',
+        ttlSeconds: 900,
+        traceId: `trace-scen5-${index + 1}`,
+      };
+      return appointmentsService.bookAppointment(dto, { nowOverride: testNow });
+    });
+
+    const startTimestamp = Date.now();
+    const results = await Promise.allSettled(requests);
+    const totalDurationMs = Date.now() - startTimestamp;
+
+    let successfulCount = 0;
+    let rejectedCount = 0;
+    const rejectionReasons: Record<string, number> = {};
+    const httpStatusCodes: Record<number, number> = {};
+    let winningConvId = '';
+
+    for (const res of results) {
+      if (res.status === 'fulfilled') {
+        successfulCount++;
+        httpStatusCodes[201] = (httpStatusCodes[201] || 0) + 1;
+        expect(res.value.isIdempotentReplay).toBe(false);
+        expect(res.value.status).toBe(AppointmentStatus.SOLICITADA);
+        expect(res.value.appointment).toBeDefined();
+        expect(res.value.appointment.doctorId).toBe(DOCTOR_5_ID);
+        winningConvId = res.value.appointment.conversationId;
+      } else {
+        rejectedCount++;
+        httpStatusCodes[409] = (httpStatusCodes[409] || 0) + 1;
+        const err = res.reason;
+        expect(err).toBeInstanceOf(ConflictException);
+        const errMsg = (err as ConflictException).message;
+        rejectionReasons[errMsg] = (rejectionReasons[errMsg] || 0) + 1;
+        expect(errMsg).toMatch(/ya se encuentra temporalmente bloqueado/);
+      }
+    }
+
+    // Exact invariants
+    expect(successfulCount).toBe(1);
+    expect(rejectedCount).toBe(N - 1); // 19 rejections
+
+    // Postgres ground truth: exactly 1 appointment row exists for this slot
+    const createdAppointments = Array.from(prismaHarness.appointments.values()).filter(
+      (a) =>
+        a.doctorId === DOCTOR_5_ID &&
+        new Date(a.startAt).getTime() === new Date(slotTime).getTime(),
+    );
+    expect(createdAppointments.length).toBe(1);
+    expect(createdAppointments[0].status).toBe(AppointmentStatus.SOLICITADA);
+    expect(createdAppointments[0].conversationId).toBe(winningConvId);
+
+    // Redis ground truth: slot locked by winner, counter = 1
+    const slotKey = holdService.getSlotKey(CLINIC_ID, DOCTOR_5_ID, slotTime);
+    const redisOwner = await redisHarness.get(slotKey);
+    expect(redisOwner).toBe(winningConvId);
+
+    const counterStr = await redisHarness.get(
+      holdService.getCounterKey(CLINIC_ID, DOCTOR_5_ID),
+    );
+    const doctorCounter = counterStr ? parseInt(counterStr, 10) : 0;
+    expect(doctorCounter).toBe(1);
+
+    metricsReport.push({
+      scenario: 'Escenario 5: 20 Book Reqs Same Slot',
+      totalRequests: N,
+      successfulHolds: successfulCount,
+      rejectedHolds: rejectedCount,
+      rejectionReasons,
+      httpStatusCodes,
+      totalDurationMs,
+      avgLatencyMs: totalDurationMs / N,
+      redisDoctorCounter: doctorCounter,
+      redisSlotLocked: true,
+      dbConsistent: true,
+    });
+  });
+
+  /**
+   * ============================================================================
+   * ESCENARIO 6: Compensación Postgres: Fallo simulado en la persistencia de Postgres
+   * inmediatamente después de un hold exitoso en Redis.
+   *
+   * Verificación:
+   * - Se ejecuta releaseHold compensatorio en Redis (clave borrada, contador decrementado a 0).
+   * - Postgres queda limpio (sin citas a medio crear ni filas huérfanas).
+   * - Un intento posterior por el mismo slot tiene éxito sin conflictos.
+   * ============================================================================
+   */
+  it('Escenario 6: Fallo simulado de Postgres tras hold exitoso -> compensación libera hold en Redis y Postgres queda limpio', async () => {
+    const slotTime = '2026-09-29T11:00:00.000Z';
+    const testNow = new Date('2026-09-28T11:00:00.000Z');
+    const failingConvId = 'conv-scen6-fail';
+
+    // 1. Inject simulated database failure into prisma.appointment.create
+    const originalCreate = prismaHarness.appointment.create;
+    prismaHarness.appointment.create = jest
+      .fn()
+      .mockRejectedValueOnce(
+        new Error('Simulated PostgreSQL Error: Connection timeout during insert'),
+      );
+
+    const failingDto: BookAppointmentDto = {
+      clinicId: CLINIC_ID,
+      doctorId: DOCTOR_6_ID,
+      patientId: PATIENT_1_ID,
+      conversationId: failingConvId,
+      startAt: slotTime,
+      motivo: 'Fallo simulado de DB',
+      ttlSeconds: 900,
+      traceId: 'trace-scen6-fail',
+    };
+
+    const startTimestamp = Date.now();
+
+    // Call must fail with simulated DB error
+    await expect(
+      appointmentsService.bookAppointment(failingDto, { nowOverride: testNow }),
+    ).rejects.toThrow('Simulated PostgreSQL Error');
+
+    // Restore create method
+    prismaHarness.appointment.create = originalCreate;
+
+    // 2. Verify Redis Compensation: Slot key must be deleted, counter must be 0
+    const slotKey = holdService.getSlotKey(CLINIC_ID, DOCTOR_6_ID, slotTime);
+    const slotOwner = await redisHarness.get(slotKey);
+    expect(slotOwner).toBeNull();
+
+    const counterStr = await redisHarness.get(
+      holdService.getCounterKey(CLINIC_ID, DOCTOR_6_ID),
+    );
+    const doctorCounterAfterComp = counterStr ? parseInt(counterStr, 10) : 0;
+    expect(doctorCounterAfterComp).toBe(0);
+
+    // 3. Verify Postgres: 0 appointments created for DOCTOR_6_ID
+    const appts = Array.from(prismaHarness.appointments.values()).filter(
+      (a) => a.doctorId === DOCTOR_6_ID,
+    );
+    expect(appts.length).toBe(0);
+
+    // 4. Verify Recovery: A subsequent request for the same slot succeeds cleanly
+    const recoveryConvId = 'conv-scen6-recovery';
+    const recoveryDto: BookAppointmentDto = {
+      ...failingDto,
+      conversationId: recoveryConvId,
+      traceId: 'trace-scen6-recovery',
+    };
+
+    const recoveryResult = await appointmentsService.bookAppointment(recoveryDto, {
+      nowOverride: testNow,
+    });
+    const totalDurationMs = Date.now() - startTimestamp;
+
+    expect(recoveryResult.isIdempotentReplay).toBe(false);
+    expect(recoveryResult.status).toBe(AppointmentStatus.SOLICITADA);
+
+    // Redis now has slot held by recovery user, counter is 1
+    const ownerAfterRecovery = await redisHarness.get(slotKey);
+    expect(ownerAfterRecovery).toBe(recoveryConvId);
+
+    const counterAfterRecoveryStr = await redisHarness.get(
+      holdService.getCounterKey(CLINIC_ID, DOCTOR_6_ID),
+    );
+    const doctorCounterAfterRecovery = counterAfterRecoveryStr
+      ? parseInt(counterAfterRecoveryStr, 10)
+      : 0;
+    expect(doctorCounterAfterRecovery).toBe(1);
+
+    // DB now has exactly 1 appointment
+    const finalAppts = Array.from(prismaHarness.appointments.values()).filter(
+      (a) => a.doctorId === DOCTOR_6_ID,
+    );
+    expect(finalAppts.length).toBe(1);
+
+    metricsReport.push({
+      scenario: 'Escenario 6: Postgres Compensation',
+      totalRequests: 2,
+      successfulHolds: 1,
+      rejectedHolds: 1,
+      rejectionReasons: { 'Simulated PostgreSQL Error': 1 },
+      httpStatusCodes: { 500: 1, 201: 1 },
+      totalDurationMs,
+      avgLatencyMs: totalDurationMs / 2,
+      redisDoctorCounter: doctorCounterAfterRecovery,
+      redisSlotLocked: true,
+      dbConsistent: true,
+    });
+  });
+
+  /**
+   * ============================================================================
+   * ESCENARIO 7: Idempotencia Concurrente: Doble o triple llamada simultánea de `book`
+   * con el mismo conversationId+slot vía Promise.all.
+   *
+   * Verificación:
+   * - No duplica filas en Postgres (exactamente 1 cita creada).
+   * - Las repeticiones retornan la cita existente (isIdempotentReplay: true).
+   * - No desbalancea contadores en Redis (contador = 1).
+   * - Ambas o las tres peticiones resuelven satisfactoriamente.
+   * ============================================================================
+   */
+  it('Escenario 7: Re-entrada idempotente simultánea con 3 peticiones concurrentes de book -> exactamente 1 crea fila, repeticiones retornan cita existente sin desbalancear Redis', async () => {
+    const slotTime = '2026-09-29T12:00:00.000Z';
+    const testNow = new Date('2026-09-28T12:00:00.000Z');
+    const conversationId = 'conv-scen7-idempotent-user';
+    const totalRequests = 3;
+
+    const dto: BookAppointmentDto = {
+      clinicId: CLINIC_ID,
+      doctorId: DOCTOR_7_ID,
+      patientId: PATIENT_1_ID,
+      conversationId,
+      startAt: slotTime,
+      motivo: 'Consulta idempotente concurrente',
+      ttlSeconds: 900,
+      traceId: 'trace-scen7-idempotent',
+    };
+
+    const startTimestamp = Date.now();
+    // Fire 3 identical requests simultaneously
+    const results = await Promise.all([
+      appointmentsService.bookAppointment(dto, { nowOverride: testNow }),
+      appointmentsService.bookAppointment(dto, { nowOverride: testNow }),
+      appointmentsService.bookAppointment(dto, { nowOverride: testNow }),
+    ]);
+    const totalDurationMs = Date.now() - startTimestamp;
+
+    // All must succeed
+    expect(results.length).toBe(3);
+    for (const res of results) {
+      expect(res.status).toBe(AppointmentStatus.SOLICITADA);
+      expect(res.appointment).toBeDefined();
+      expect(res.appointment.doctorId).toBe(DOCTOR_7_ID);
+      expect(res.appointment.conversationId).toBe(conversationId);
+    }
+
+    // Exactly one created it and the other two returned idempotent replays
+    const newCreations = results.filter((r) => !r.isIdempotentReplay);
+    const replays = results.filter((r) => r.isIdempotentReplay);
+    expect(newCreations.length).toBe(1);
+    expect(replays.length).toBe(2);
+
+    // Postgres DB Ground Truth: Exactly 1 row created, no duplicates
+    const apptsInDb = Array.from(prismaHarness.appointments.values()).filter(
+      (a) => a.doctorId === DOCTOR_7_ID,
+    );
+    expect(apptsInDb.length).toBe(1);
+    expect(apptsInDb[0].conversationId).toBe(conversationId);
+
+    // Redis Consistency: Counter is EXACTLY 1 (not 3, no desync)
+    const slotKey = holdService.getSlotKey(CLINIC_ID, DOCTOR_7_ID, slotTime);
+    const owner = await redisHarness.get(slotKey);
+    expect(owner).toBe(conversationId);
+
+    const counterStr = await redisHarness.get(
+      holdService.getCounterKey(CLINIC_ID, DOCTOR_7_ID),
+    );
+    const doctorCounter = counterStr ? parseInt(counterStr, 10) : 0;
+    expect(doctorCounter).toBe(1);
+
+    metricsReport.push({
+      scenario: 'Escenario 7: Idempotent Book Re-entry',
+      totalRequests,
+      successfulHolds: 3,
+      rejectedHolds: 0,
+      rejectionReasons: {},
+      httpStatusCodes: { 201: 1, 200: 2 },
+      totalDurationMs,
+      avgLatencyMs: totalDurationMs / totalRequests,
+      redisDoctorCounter: doctorCounter,
+      redisSlotLocked: true,
+      dbConsistent: true,
+    });
+  });
+
+  /**
+   * ============================================================================
+   * ESCENARIO 8: Tenant Isolation en Book: Verificar que una petición con doctor
+   * o paciente de otra clínica no pueda adueñarse del slot ni agendar en otro tenant.
+   *
+   * Verificación:
+   * - Cross-tenant doctor -> rechazado con NotFoundException (404).
+   * - Cross-tenant patient -> rechazado con NotFoundException (404).
+   * - Non-existent clinic -> rechazado con NotFoundException (404).
+   * - Ataque concurrente multi-tenant simulado -> todas las peticiones rechazadas.
+   * - Redis queda con 0 holds para doctores externos y Postgres con 0 registros cruzados.
+   * ============================================================================
+   */
+  it('Escenario 8: Tenant Isolation en Book -> rechaza acceso cruzado de doctor o paciente de otra clínica (RNF-001)', async () => {
+    const slotTime = '2026-09-29T14:00:00.000Z';
+    const testNow = new Date('2026-09-28T14:00:00.000Z');
+
+    // Case A: Doctor from Clinic 2 targeted in Clinic 1
+    const crossDoctorDto: BookAppointmentDto = {
+      clinicId: CLINIC_ID,
+      doctorId: DOCTOR_FOREIGN_ID,
+      patientId: PATIENT_1_ID,
+      conversationId: 'conv-cross-doc',
+      startAt: slotTime,
+      motivo: 'Cross tenant doctor attack',
+      ttlSeconds: 900,
+    };
+
+    // Case B: Patient from Clinic 2 targeted in Clinic 1
+    const crossPatientDto: BookAppointmentDto = {
+      clinicId: CLINIC_ID,
+      doctorId: DOCTOR_5_ID,
+      patientId: PATIENT_FOREIGN_ID,
+      conversationId: 'conv-cross-patient',
+      startAt: slotTime,
+      motivo: 'Cross tenant patient attack',
+      ttlSeconds: 900,
+    };
+
+    // Case C: Non-existent clinic
+    const nonExistentClinicDto: BookAppointmentDto = {
+      clinicId: 'non-existent-clinic-00000',
+      doctorId: DOCTOR_5_ID,
+      patientId: PATIENT_1_ID,
+      conversationId: 'conv-fake-clinic',
+      startAt: slotTime,
+      motivo: 'Non existent clinic',
+      ttlSeconds: 900,
+    };
+
+    // Case D: Multiple concurrent cross-tenant attempts
+    const concurrentAttacks = [
+      crossDoctorDto,
+      crossPatientDto,
+      nonExistentClinicDto,
+      { ...crossDoctorDto, conversationId: 'conv-cross-doc-2' },
+      { ...crossPatientDto, conversationId: 'conv-cross-patient-2' },
+    ];
+
+    const startTimestamp = Date.now();
+    const results = await Promise.allSettled(
+      concurrentAttacks.map((dto) =>
+        appointmentsService.bookAppointment(dto, { nowOverride: testNow }),
+      ),
+    );
+    const totalDurationMs = Date.now() - startTimestamp;
+
+    let rejectedCount = 0;
+    const rejectionReasons: Record<string, number> = {};
+    const httpStatusCodes: Record<number, number> = {};
+
+    for (const res of results) {
+      expect(res.status).toBe('rejected');
+      if (res.status === 'rejected') {
+        rejectedCount++;
+        httpStatusCodes[404] = (httpStatusCodes[404] || 0) + 1;
+        const err = res.reason;
+        expect(err).toBeInstanceOf(NotFoundException);
+        const reason = (err as NotFoundException).message;
+        rejectionReasons[reason] = (rejectionReasons[reason] || 0) + 1;
+      }
+    }
+
+    expect(rejectedCount).toBe(concurrentAttacks.length);
+
+    // Verify Redis has ZERO holds created for foreign doctor
+    const counterForeignDoctorStr = await redisHarness.get(
+      holdService.getCounterKey(CLINIC_2_ID, DOCTOR_FOREIGN_ID),
+    );
+    const counterForeignDoctor = counterForeignDoctorStr
+      ? parseInt(counterForeignDoctorStr, 10)
+      : 0;
+    expect(counterForeignDoctor).toBe(0);
+
+    // Verify Postgres has ZERO appointments created for foreign doctor
+    const crossDoctorAppts = Array.from(prismaHarness.appointments.values()).filter(
+      (a) => a.doctorId === DOCTOR_FOREIGN_ID,
+    );
+    expect(crossDoctorAppts.length).toBe(0);
+
+    metricsReport.push({
+      scenario: 'Escenario 8: Tenant Isolation in Book',
+      totalRequests: concurrentAttacks.length,
+      successfulHolds: 0,
+      rejectedHolds: rejectedCount,
+      rejectionReasons,
+      httpStatusCodes,
+      totalDurationMs,
+      avgLatencyMs: totalDurationMs / concurrentAttacks.length,
+      redisDoctorCounter: counterForeignDoctor,
       redisSlotLocked: false,
       dbConsistent: true,
     });
