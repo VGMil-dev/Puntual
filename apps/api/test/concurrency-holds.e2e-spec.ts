@@ -511,6 +511,7 @@ class HybridPrismaHarness {
 
 describe('Automated Concurrency Test Suite (E2.2d / RF-025 / RNF-011 / DoD §10)', () => {
   let app: INestApplication;
+  let httpServer: any;
   let holdService: HoldService;
   let expirationService: ExpirationService;
   let appointmentsService: AppointmentsService;
@@ -592,9 +593,26 @@ describe('Automated Concurrency Test Suite (E2.2d / RF-025 / RNF-011 / DoD §10)
       }),
     );
     await app.init();
-  });
+
+    // Start the HTTP server explicitly on an ephemeral port so supertest
+    // reuses a single listening socket across concurrent requests.
+    // Without this, supertest calls server.listen(0) per request, exhausting
+    // ephemeral ports under 20-way concurrency (CI runner limitation).
+    httpServer = app.getHttpServer();
+    if (!httpServer.listening) {
+      await new Promise<void>((resolve, reject) => {
+        httpServer.once('error', reject);
+        httpServer.listen(0, () => resolve());
+      });
+    }
+  }, 60000);
 
   afterAll(async () => {
+    if (httpServer?.listening) {
+      await new Promise<void>((resolve, reject) => {
+        httpServer.close((err: Error | undefined) => (err ? reject(err) : resolve()));
+      });
+    }
     await redisHarness.close();
     if (app) {
       await app.close();
@@ -654,87 +672,92 @@ describe('Automated Concurrency Test Suite (E2.2d / RF-025 / RNF-011 / DoD §10)
    * - El slot en Redis pertenece al ganador.
    * ============================================================================
    */
-  it('Escenario 1: 20 peticiones concurrentes simultáneas por el mismo slot -> EXACTAMENTE 1 gana el hold (RF-025, RNF-011)', async () => {
-    const N = 20;
-    const slotTime = '2026-09-25T09:00:00.000Z';
+  it(
+    'Escenario 1: 20 peticiones concurrentes simultáneas por el mismo slot -> EXACTAMENTE 1 gana el hold (RF-025, RNF-011)',
+    async () => {
+      const N = 20;
+      const slotTime = '2026-09-25T09:00:00.000Z';
 
-    const requests = Array.from({ length: N }, (_, index) => {
-      const convId = `conv-scen1-user-${String(index + 1).padStart(2, '0')}`;
-      return request(app.getHttpServer())
-        .post('/internal/holds/acquire')
-        .send({
-          clinicId: CLINIC_ID,
-          doctorId: DOCTOR_1_ID,
-          startAt: slotTime,
-          conversationId: convId,
-          ttlSeconds: 900,
-        });
-    });
+      const requests = Array.from({ length: N }, (_, index) => {
+        const convId = `conv-scen1-user-${String(index + 1).padStart(2, '0')}`;
+        return request(httpServer)
+          .post('/internal/holds/acquire')
+          .set('Connection', 'close')
+          .send({
+            clinicId: CLINIC_ID,
+            doctorId: DOCTOR_1_ID,
+            startAt: slotTime,
+            conversationId: convId,
+            ttlSeconds: 900,
+          });
+      });
 
-    const startTimestamp = Date.now();
-    const responses = await Promise.all(requests);
-    const totalDurationMs = Date.now() - startTimestamp;
+      const startTimestamp = Date.now();
+      const responses = await Promise.all(requests);
+      const totalDurationMs = Date.now() - startTimestamp;
 
-    // Collect response metrics
-    const httpStatusCodes: Record<number, number> = {};
-    const rejectionReasons: Record<string, number> = {};
-    let successfulCount = 0;
-    let rejectedCount = 0;
-    let winningConversationId = '';
+      // Collect response metrics
+      const httpStatusCodes: Record<number, number> = {};
+      const rejectionReasons: Record<string, number> = {};
+      let successfulCount = 0;
+      let rejectedCount = 0;
+      let winningConversationId = '';
 
-    for (const res of responses) {
-      httpStatusCodes[res.status] = (httpStatusCodes[res.status] || 0) + 1;
-      expect(res.status).toBe(201); // Nest @Post default is 201 Created
+      for (const res of responses) {
+        httpStatusCodes[res.status] = (httpStatusCodes[res.status] || 0) + 1;
+        expect(res.status).toBe(201); // Nest @Post default is 201 Created
 
-      if (res.body.success === true) {
-        successfulCount++;
-        expect(res.body.reason).toBe('OK');
-        expect(res.body.slotKey).toBe(
-          holdService.getSlotKey(CLINIC_ID, DOCTOR_1_ID, slotTime),
-        );
-        expect(res.body.counterKey).toBe(
-          holdService.getCounterKey(CLINIC_ID, DOCTOR_1_ID),
-        );
-        // Find which conversation was recorded as winning
-      } else {
-        rejectedCount++;
-        const reason = res.body.reason;
-        rejectionReasons[reason] = (rejectionReasons[reason] || 0) + 1;
-        expect(reason).toBe('SLOT_ALREADY_LOCKED');
+        if (res.body.success === true) {
+          successfulCount++;
+          expect(res.body.reason).toBe('OK');
+          expect(res.body.slotKey).toBe(
+            holdService.getSlotKey(CLINIC_ID, DOCTOR_1_ID, slotTime),
+          );
+          expect(res.body.counterKey).toBe(
+            holdService.getCounterKey(CLINIC_ID, DOCTOR_1_ID),
+          );
+          // Find which conversation was recorded as winning
+        } else {
+          rejectedCount++;
+          const reason = res.body.reason;
+          rejectionReasons[reason] = (rejectionReasons[reason] || 0) + 1;
+          expect(reason).toBe('SLOT_ALREADY_LOCKED');
+        }
       }
-    }
 
-    // Exact invariants
-    expect(successfulCount).toBe(1);
-    expect(rejectedCount).toBe(N - 1); // 19 rejections
-    expect(rejectionReasons['SLOT_ALREADY_LOCKED']).toBe(19);
+      // Exact invariants
+      expect(successfulCount).toBe(1);
+      expect(rejectedCount).toBe(N - 1); // 19 rejections
+      expect(rejectionReasons['SLOT_ALREADY_LOCKED']).toBe(19);
 
-    // Consistency in Redis
-    const slotKey = holdService.getSlotKey(CLINIC_ID, DOCTOR_1_ID, slotTime);
-    winningConversationId = (await redisHarness.get(slotKey)) || '';
-    expect(winningConversationId).toMatch(/^conv-scen1-user-\d{2}$/);
+      // Consistency in Redis
+      const slotKey = holdService.getSlotKey(CLINIC_ID, DOCTOR_1_ID, slotTime);
+      winningConversationId = (await redisHarness.get(slotKey)) || '';
+      expect(winningConversationId).toMatch(/^conv-scen1-user-\d{2}$/);
 
-    const doctorCounterStr = await redisHarness.get(
-      holdService.getCounterKey(CLINIC_ID, DOCTOR_1_ID),
-    );
-    const doctorCounter = doctorCounterStr ? parseInt(doctorCounterStr, 10) : 0;
-    expect(doctorCounter).toBe(1);
+      const doctorCounterStr = await redisHarness.get(
+        holdService.getCounterKey(CLINIC_ID, DOCTOR_1_ID),
+      );
+      const doctorCounter = doctorCounterStr ? parseInt(doctorCounterStr, 10) : 0;
+      expect(doctorCounter).toBe(1);
 
-    // Record metrics
-    metricsReport.push({
-      scenario: 'Escenario 1: 20 Reqs Same Slot',
-      totalRequests: N,
-      successfulHolds: successfulCount,
-      rejectedHolds: rejectedCount,
-      rejectionReasons,
-      httpStatusCodes,
-      totalDurationMs,
-      avgLatencyMs: totalDurationMs / N,
-      redisDoctorCounter: doctorCounter,
-      redisSlotLocked: true,
-      dbConsistent: true,
-    });
-  });
+      // Record metrics
+      metricsReport.push({
+        scenario: 'Escenario 1: 20 Reqs Same Slot',
+        totalRequests: N,
+        successfulHolds: successfulCount,
+        rejectedHolds: rejectedCount,
+        rejectionReasons,
+        httpStatusCodes,
+        totalDurationMs,
+        avgLatencyMs: totalDurationMs / N,
+        redisDoctorCounter: doctorCounter,
+        redisSlotLocked: true,
+        dbConsistent: true,
+      });
+    },
+    30000,
+  );
 
   /**
    * ============================================================================
@@ -760,7 +783,7 @@ describe('Automated Concurrency Test Suite (E2.2d / RF-025 / RNF-011 / DoD §10)
 
     const requests = slots.map((slot, index) => {
       const convId = `conv-scen2-user-${index + 1}`;
-      return request(app.getHttpServer())
+      return request(httpServer)
         .post('/internal/holds/acquire')
         .send({
           clinicId: CLINIC_ID,
