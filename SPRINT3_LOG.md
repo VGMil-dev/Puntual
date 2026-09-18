@@ -101,5 +101,78 @@
     - Suite de concurrencia (`concurrency-holds.e2e-spec.ts`, 8/8 escenarios pasando, 100%)
     - Linter de frontera multi-tenant (`check-tenant-boundary.js`, 85 archivos verificados, 0 violaciones)
     - Compilación NestJS (`nest build`) 100% limpia.
+- **2026-09-18 09:10:00 UTC-5**: Remediación puntual del hallazgo H6 (Contratos estrictos de DI en `AppointmentsService`) completada y validada:
+  - **H6 (Contrato DI estricto en AppointmentsService)**: Se revirtió `@Optional()` en `calendarPort`, `logger` y `availabilityService`, haciéndolos dependencias obligatorias del constructor en `AppointmentsService` (Guía de Arquitectura §9, §26). Se eliminaron todos los operadores de optional chaining (`?.`) sobre `logger` y `calendarPort`. Se removió la verificación defensiva redundante `if (!this.availabilityService)` al estar garantizada por DI en tiempo de arranque. Se proveyó mock completo para `CALENDAR_PORT` en `book-appointment.spec.ts`.
+  - **Auditoría de Subagente C (`reviewer_architect`)**:
+    - `appointments.module.ts` importa `CalendarModule` (que exporta `CALENDAR_PORT`), `AvailabilityModule` (que exporta `AvailabilityService`), `HoldModule` (que exporta `HoldService`). `AppModule` importa `LoggingModule` (que es `@Global()` y exporta `StructuredLoggerService`).
+    - Cero `?.` residuales en `appointments.service.ts` sobre dependencias inyectadas.
+    - Cumplimiento de DoD §1 a §10 verificado. Veredicto: **APROBADO**.
+  - **Diff de Git (commit previo 98403c7 vs HEAD)**:
+    ```bash
+    $ git diff 98403c7..HEAD --stat
+     .../modules/appointments/appointments.service.ts   | 23 +++++++++-------------
+     .../modules/appointments/book-appointment.spec.ts  | 19 +++++++++++++-----
+     2 files changed, 23 insertions(+), 19 deletions(-)
+    ```
+  - **Log de Compilación (`nest build`)**:
+    ```bash
+    $ prisma generate --schema=../../prisma/schema.prisma
+    ✔ Generated Prisma Client (v6.19.3) in 400ms
+    $ nest build
+    (Compilación 100% limpia sin errores)
+    ```
+  - **Log Completo de Tests Unitarios (`pnpm --filter @puntual/api test -- --runInBand`)**:
+    ```text
+    $ jest "--runInBand"
+    PASS src/modules/appointments/book-appointment.spec.ts (44.285 s)
+    PASS src/modules/appointments/confirm-appointment.spec.ts
+    PASS src/modules/appointments/calendar-sync.worker.spec.ts
+    PASS src/modules/expiration/expiration.service.spec.ts
+    PASS src/modules/holds/hold.service.spec.ts
+    PASS src/modules/availability/availability.service.spec.ts
+    PASS test/infisical.adapter.spec.ts
+
+    Test Suites: 7 passed, 7 total
+    Tests:       84 passed, 84 total
+    Snapshots:   0 total
+    Time:        48.486 s
+    Ran all test suites.
+    ```
+  - **Log Completo de Integración E2E (`test/walking-skeleton-booking.e2e-spec.ts`)**:
+    ```text
+    $ jest --config ./test/jest-e2e.json --runInBand "./test/walking-skeleton-booking.e2e-spec.ts"
+    PASS test/walking-skeleton-booking.e2e-spec.ts (47.666 s)
+      Walking Skeleton Integration: book → confirm (CU-001 / E2.2b-bis / E2.3)
+        √ Step 1: POST /internal/appointments/book -> acquires hold in Redis and creates SOLICITADA appointment in Postgres (201 Created) (201 ms)
+        √ Step 2: POST /internal/appointments/book -> repeated request with same conversationId returns 200 OK without creating duplicate (11 ms)
+        √ Step 3: POST /internal/appointments/confirm -> confirms appointment, releases hold and creates Calendar event (200 OK) (10 ms)
+        √ Step 4: POST /internal/appointments/confirm -> repeated confirmation returns 200 OK (isPriorConfirmation: true) idempotently (8 ms)
+        √ Step 5: POST /internal/appointments/confirm -> rejected when another conversation attempts to confirm or claim (10 ms)
+
+    Test Suites: 1 passed, 1 total
+    Tests:       5 passed, 5 total
+    Snapshots:   0 total
+    Time:        48.625 s
+    Ran all test suites matching /.\\test\\walking-skeleton-booking.e2e-spec.ts/i.
+    ```
+  - **Log Completo de Concurrencia (`concurrency-holds.e2e-spec.ts`)**:
+    ```text
+    PASS test/concurrency-holds.e2e-spec.ts (41.241 s)
+      Automated Concurrency Test Suite (E2.2d / RF-025 / RNF-011 / DoD §10)
+        √ Escenario 1: 20 peticiones concurrentes simultáneas por el mismo slot -> EXACTAMENTE 1 gana el hold (RF-025, RNF-011) (187 ms)
+        √ Escenario 2: 5 peticiones concurrentes con maxConcurrentHolds = 3 -> EXACTAMENTE 3 ganan, 2 rechazadas con MAX_HOLDS_EXCEEDED (33 ms)
+        √ Escenario 3: Carrera entre hold que expira y confirmación/re-adquisición simultánea -> no se confirma hold expirado (RF-025, CU-001) (46 ms)
+        √ Escenario 4: Reentrada idempotente con 2 confirmaciones simultáneas vía Promise.all -> cita no duplicada y contador no desbalanceado (RNF-011) (12 ms)
+        √ Escenario 5: 20 peticiones concurrentes de book compitiendo por el mismo slot -> EXACTAMENTE 1 crea Appointment en Postgres y adquiere hold, 19 rechazadas con ConflictException (36 ms)
+        √ Escenario 6: Fallo simulado de Postgres tras hold exitoso -> compensación libera hold en Redis y Postgres queda limpio (62 ms)
+        √ Escenario 7: Re-entrada idempotente simultánea con 3 peticiones concurrentes de book -> exactamente 1 crea fila, repeticiones retornan cita existente sin desbalancear Redis (11 ms)
+        √ Escenario 8: Tenant Isolation en Book -> rechaza acceso cruzado de doctor o paciente de otra clínica (RNF-001) (5 ms)
+
+    Test Suites: 1 passed, 1 total
+    Tests:       8 passed, 8 total
+    Snapshots:   0 total
+    Time:        42.154 s
+    Ran all test suites matching /.\\test\\concurrency-holds.e2e-spec.ts/i.
+    ```
 
 
