@@ -18,6 +18,8 @@
 | **`DoctorSchedule`** | `doctor_schedules` | `clinicId` | No (estricto, indexado junto a `doctorId`) | `onDelete: Cascade` con `Clinic` | Obligatoria (horarios de atención) |
 | **`ChannelCredential`** | `channel_credentials` | `clinicId` | No (estricto, indexado junto a `channelType`) | `onDelete: Cascade` con `Clinic` | Obligatoria (credenciales de canales) |
 | **`OperationalLog`** | `operational_logs` | `clinicId` | Sí (solo nulo en logs a nivel plataforma; obligatorio en flujos tenant) | `onDelete: SetNull` con `Clinic` | Obligatoria (trazabilidad y métricas) |
+| **`Conversation`** | `conversations` | `clinicId` | No (estricto, clave única compuesta `[clinicId, channelType, channelThreadId]`) | `onDelete: Cascade` con `Clinic` | Obligatoria (hilos de mensajería omnicanal) |
+| **`ScheduledJob`** | `scheduled_jobs` | `clinicId` | No (estricto, indexado junto a `status` y `type`) | `onDelete: Cascade` con `Clinic` | Obligatoria (trabajos en background e idempotencia) |
 
 ## Regla de evolución
-Cada vez que se introduzca un nuevo modelo en `schema.prisma` durante fases posteriores (ej. `Conversation`, `ScheduledJob`, `SurveyResponse`), este documento debe actualizarse y los tests de E11.3 deben extenderse para mantener el 100% de cobertura de aislamiento.
+Cada vez que se introduzca un nuevo modelo en `schema.prisma` durante fases posteriores (ej. `SurveyResponse`), este documento debe actualizarse y los tests de E11.3 deben extenderse para mantener el 100% de cobertura de aislamiento.

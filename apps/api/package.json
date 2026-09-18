@@ -11,7 +11,8 @@
     "test": "jest",
     "test:watch": "jest --watch",
     "test:cov": "jest --coverage",
-    "test:e2e": "jest --config ./test/jest-e2e.json --runInBand"
+    "test:e2e": "jest --config ./test/jest-e2e.json --runInBand",
+    "test:concurrency": "jest --config ./test/jest-e2e.json ./test/concurrency-holds.e2e-spec.ts --runInBand"
   },
   "dependencies": {
     "@ai-sdk/google": "^4.0.69",

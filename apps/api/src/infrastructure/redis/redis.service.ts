@@ -69,6 +69,33 @@ export class RedisService implements OnModuleInit, OnModuleDestroy {
     }
   }
 
+  async eval(script: string, numkeys: number, ...args: (string | number)[]): Promise<any> {
+    try {
+      return await (this.client as any).eval(script, numkeys, ...args);
+    } catch (error) {
+      this.logger.error('Redis eval failed', error);
+      throw error;
+    }
+  }
+
+  async keys(pattern: string): Promise<string[]> {
+    try {
+      return await this.client.keys(pattern);
+    } catch (error) {
+      this.logger.error(`Redis keys failed for pattern ${pattern}`, error);
+      return [];
+    }
+  }
+
+  async ttl(key: string): Promise<number> {
+    try {
+      return await this.client.ttl(key);
+    } catch (error) {
+      this.logger.error(`Redis ttl failed for key ${key}`, error);
+      return -2;
+    }
+  }
+
   async isHealthy(): Promise<boolean> {
     try {
       const response = await this.client.ping();

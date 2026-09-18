@@ -16,6 +16,10 @@ import { CalendarModule } from './modules/calendar/calendar.module';
 import { DoctorsModule } from './modules/doctors/doctors.module';
 import { AiModule } from './modules/ai/ai.module';
 import { MetricsModule } from './modules/metrics/metrics.module';
+import { AvailabilityModule } from './modules/availability/availability.module';
+import { HoldModule } from './modules/holds/hold.module';
+import { ExpirationModule } from './modules/expiration/expiration.module';
+import { AppointmentsModule } from './modules/appointments/appointments.module';
 
 @Module({
   imports: [
@@ -37,6 +41,10 @@ import { MetricsModule } from './modules/metrics/metrics.module';
     AiModule,
     WebhooksModule,
     MetricsModule,
+    AvailabilityModule,
+    HoldModule,
+    ExpirationModule,
+    AppointmentsModule,
   ],
   providers: [
     {
