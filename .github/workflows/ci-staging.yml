@@ -97,7 +97,7 @@ jobs:
           echo "Running prisma migrate deploy against staging database..."
           npx prisma migrate deploy
 
-      - name: Deploy to Staging VPS via SSH (D1: VPS Propio)
+      - name: "Deploy to Staging VPS via SSH (D1: VPS Propio)"
         uses: appleboy/ssh-action@v1.0.3
         with:
           host: ${{ secrets.STAGING_HOST }}

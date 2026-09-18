@@ -51,14 +51,14 @@ Tests:       4 passed, 4 total
 ### 3. Checklist de Definition of Done Transversal (Backlog §7)
 
 - [x] **1. Código integrado:** Rama `feat/sprint-3-walking-skeleton` lista para squash-and-merge hacia `develop`.
-- [x] **2. Tests automatizados apropiados al riesgo:** 63 tests unitarios (5 suites) + 4 tests E2E de concurrencia = 67 tests pasando al 100%.
+- [x] **2. Tests automatizados apropiados al riesgo:** 84 tests unitarios (7 suites) + 5 E2E walking skeleton + 8 E2E concurrencia + 17 E2E tenant isolation = **114 tests pasando al 100% localmente**. **Nota:** validación 100% local — ver §7 para contexto sobre el CI.
 - [x] **3. Tenant isolation probado:** Entidades `Conversation` y `ScheduledJob` documentadas en `docs/models-with-clinic-id.md` y cubiertas en `apps/api/test/tenant-isolation.e2e-spec.ts`. Linter de tenant con 0 violaciones en 83 archivos TypeScript.
 - [x] **4. Logs estructurados:** Emisión sistemática con `traceId`, `clinicId`, `doctorId`, `appointmentId`, `conversationId` y categorizaciones (`CalendarSyncFailed`, `CalendarAuthorizationError`, etc.).
 - [x] **5. Manejo explícito de error/reintento:** Fallo parcial de Google Calendar retiene la cita en `CONFIRMADA`, crea un `ScheduledJob` para reintento con backoff exponencial y entrega confirmación al paciente sin alertar fallos internos (RNF-006).
 - [x] **6. Migraciones Prisma incluidas:**
   - `20260917095000_add_conversation_scheduled_job_and_exclusion_constraint`: tablas `conversations`, `scheduled_jobs`, extensión `btree_gist` y partial exclusion constraint.
   - `20260917100000_add_conversation_id_to_appointment`: columna e índice compuesto tenant-aware `conversationId` en `appointments`.
-- [x] **7. Staging validado:** Pipeline `.github/workflows/ci-staging.yml` actualizado con `test:concurrency` bloqueante.
+- [x] **7. Staging validado (local):** Pipeline `.github/workflows/ci-staging.yml` actualizado con `test:concurrency` bloqueante. **Nota:** la validación del Sprint 3 fue 100% local (114 tests verdes). El workflow de GitHub Actions nunca llegó a ejecutar jobs durante el sprint por un defecto de sintaxis YAML preexistente de Sprint 1 (línea 100, commit `e21f7755`), corregido en este mismo PR. El primer run verde real de CI se obtiene en este PR (ver `docs/release/pr4-ci-run-1-report.md`).
 - [x] **8. Criterios de aceptación marcados:** Trazabilidad rigurosa con CU-001, RF-010, RF-019, RF-024, RF-025, RF-029, RNF-001, RNF-006, RNF-010, RNF-011.
 - [x] **9. Cero secretos en repo:** Infisical desacoplado, sin credenciales expuestas.
 - [x] **10. Evidencia adjunta:** Métricas numéricas de concurrencia real y dictámenes formales de auditoría arquitectónica aprobados por `reviewer_architect`.
