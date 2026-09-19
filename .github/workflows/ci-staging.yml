@@ -79,42 +79,24 @@ jobs:
         run: pnpm test:e2e
 
   deploy-staging:
-    name: Deploy to Staging (VPS + Migrations Job)
+    name: Deploy to Staging (Oracle Cloud ARM64)
     needs: quality-and-test
     if: github.ref == 'refs/heads/develop' && github.event_name == 'push'
     runs-on: ubuntu-latest
     environment: staging
-
     steps:
       - name: Checkout Repository
         uses: actions/checkout@v4
 
-      # Ticket E11.6c: Prisma migrations as deployment prerequisite job
-      - name: Run Staging Database Migration Job (E11.6c)
-        env:
-          DATABASE_URL: ${{ secrets.STAGING_DATABASE_URL }}
-        run: |
-          echo "Running prisma migrate deploy against staging database..."
-          npx prisma migrate deploy
-
-      - name: "Deploy to Staging VPS via SSH (D1: VPS Propio)"
+      - name: Deploy via SSH
         uses: appleboy/ssh-action@v1.0.3
         with:
           host: ${{ secrets.STAGING_HOST }}
           username: ${{ secrets.STAGING_USER }}
           key: ${{ secrets.STAGING_SSH_KEY }}
+          script_stop: true
+          command_timeout: 10m
           script: |
-            set -e
-            cd /opt/puntual
-            git fetch origin develop
-            git reset --hard origin/develop
-            
-            # Re-build and restart staging containers with zero downtime
-            docker compose -f docker-compose.staging.yml down
-            docker compose -f docker-compose.staging.yml up -d --build
-            
-            # Verify healthcheck endpoint (E11.6f)
-            echo "Waiting for healthcheck verification..."
-            sleep 10
-            curl -f http://localhost:3000/health || (echo "Healthcheck failed! Aborting deployment." && exit 1)
-            echo "Staging deployment successfully completed!"
+            cd ~/puntual-staging
+            bash scripts/deploy-staging.sh
+

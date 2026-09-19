@@ -1,51 +1,74 @@
+version: '3.9'
+
 services:
-  postgres:
+  puntual-postgres:
     image: postgres:16-alpine
-    container_name: puntual_staging_postgres
+    container_name: puntual-staging-postgres
     restart: unless-stopped
     environment:
       POSTGRES_USER: ${POSTGRES_USER:-puntual_staging}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required in staging}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
       POSTGRES_DB: ${POSTGRES_DB:-puntual_staging}
-    ports:
-      - "${POSTGRES_PORT:-5433}:5432"
     volumes:
-      - postgres_staging_data:/var/lib/postgresql/data
+      - puntual_staging_postgres_data:/var/lib/postgresql/data
+    networks:
+      - puntual-staging-net
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-puntual_staging} -d ${POSTGRES_DB:-puntual_staging}"]
-      interval: 5s
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-puntual_staging}"]
+      interval: 10s
       timeout: 5s
       retries: 5
-      start_period: 5s
-    networks:
-      - puntual_staging_network
 
-  redis:
+  puntual-redis:
     image: redis:7-alpine
-    container_name: puntual_staging_redis
+    container_name: puntual-staging-redis
     restart: unless-stopped
-    command: >
-      sh -c "if [ -n \"$${REDIS_PASSWORD}\" ]; then redis-server --requirepass \"$${REDIS_PASSWORD}\"; else redis-server; fi"
-    ports:
-      - "${REDIS_PORT:-6380}:6379"
+    command: ["redis-server", "--appendonly", "yes"]
     volumes:
-      - redis_staging_data:/data
+      - puntual_staging_redis_data:/data
+    networks:
+      - puntual-staging-net
     healthcheck:
-      test: >
-        sh -c "if [ -n \"$${REDIS_PASSWORD}\" ]; then redis-cli -a \"$${REDIS_PASSWORD}\" ping | grep -q PONG; else redis-cli ping | grep -q PONG; fi"
-      interval: 5s
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
       timeout: 5s
       retries: 5
-      start_period: 3s
+
+  puntual-api:
+    build:
+      context: .
+      dockerfile: apps/api/Dockerfile
+    container_name: puntual-staging-api
+    restart: unless-stopped
+    depends_on:
+      puntual-postgres:
+        condition: service_healthy
+      puntual-redis:
+        condition: service_healthy
+    env_file:
+      - .env
+    environment:
+      NODE_ENV: staging
+      PORT: 3000
+      DATABASE_URL: postgresql://${POSTGRES_USER:-puntual_staging}:${POSTGRES_PASSWORD}@puntual-postgres:5432/${POSTGRES_DB:-puntual_staging}?schema=public
+      REDIS_URL: redis://puntual-redis:6379
+    ports:
+      - "127.0.0.1:3001:3000"
     networks:
-      - puntual_staging_network
+      - puntual-staging-net
+    healthcheck:
+      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost:3000/health"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
 
 volumes:
-  postgres_staging_data:
-    name: puntual_postgres_staging_data
-  redis_staging_data:
-    name: puntual_redis_staging_data
+  puntual_staging_postgres_data:
+    name: puntual_staging_postgres_data
+  puntual_staging_redis_data:
+    name: puntual_staging_redis_data
 
 networks:
-  puntual_staging_network:
-    name: puntual_staging_network
+  puntual-staging-net:
+    name: puntual-staging-net
+    driver: bridge
