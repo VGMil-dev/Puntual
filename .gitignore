@@ -16,6 +16,7 @@ out/
 .env.production
 !.env.example
 !.env.staging.example
+generate-example-clinic/.env
 
 # Logs
 npm-debug.log*
